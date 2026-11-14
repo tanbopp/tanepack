@@ -11,7 +11,7 @@ import {
   useRef,
   useState,
 } from 'react';
-import type { DesignElement } from '@entities/design-document';
+import type { DesignElement, ImageElement, TextElement } from '@entities/design-document';
 import {
   computeSvgPathBoundsMm,
   generateTuckEndBox,
@@ -21,6 +21,17 @@ import type { Dieline, Point } from '@entities/dieline/types';
 import { mmToPx } from '@shared/lib/units';
 import { M3Button, M3Icon, M3IconButton } from '@shared/ui';
 import { useEditorStore } from './store';
+import {
+  clientPointToSvgMm,
+  computeCornerResizePatch,
+  computeRotationDegreesFromPointer,
+  createResizeSnapshot,
+  getElementSelectionFrame,
+  RESIZE_CORNERS,
+  type ResizeCorner,
+  type ResizeStartSnapshot,
+  type SelectionFrame,
+} from './transform';
 import {
   clampElementPositionToFace,
   clampZoom,
@@ -35,22 +46,49 @@ import {
 const SHEET_EXTRA_MARGIN_MM = 6;
 const HUD_ELEVATION_SHADOW = '0px 1px 2px rgba(0, 0, 0, 0.2), 0px 2px 6px 2px rgba(0, 0, 0, 0.1)';
 const SHEET_ELEVATION_SHADOW = 'drop-shadow(0 2px 6px rgba(0, 0, 0, 0.08))';
+const CORNER_HANDLE_RADIUS_MM = 2.2;
+const ROTATE_HANDLE_RADIUS_MM = 2.4;
+
+const CORNER_CURSORS: Record<ResizeCorner, string> = {
+  nw: 'nwse-resize',
+  ne: 'nesw-resize',
+  se: 'nwse-resize',
+  sw: 'nesw-resize',
+};
 
 export interface DielineStageProps {
   dimensions?: Dieline['dimensions'] | undefined;
 }
 
-interface ActiveElementDrag {
-  element: DesignElement;
-  pointerId: number | undefined;
-  startClientX: number;
-  startClientY: number;
-  startXMm: number;
-  startYMm: number;
-  zoomAtStart: number;
-  faceBounds: SvgPathBoundsMm;
-  hasMoved: boolean;
-}
+type ActiveTransformInteraction =
+  | {
+      kind: 'move';
+      element: DesignElement;
+      pointerId: number | undefined;
+      startClientX: number;
+      startClientY: number;
+      startXMm: number;
+      startYMm: number;
+      zoomAtStart: number;
+      faceBounds: SvgPathBoundsMm;
+      hasMoved: boolean;
+    }
+  | {
+      kind: 'rotate';
+      elementId: string;
+      pointerId: number | undefined;
+      center: Point;
+      hasMoved: boolean;
+    }
+  | {
+      kind: 'resize';
+      element: TextElement | ImageElement;
+      corner: ResizeCorner;
+      pointerId: number | undefined;
+      snapshot: ResizeStartSnapshot;
+      faceBounds: SvgPathBoundsMm;
+      hasMoved: boolean;
+    };
 
 function isEditableTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) {
@@ -60,11 +98,87 @@ function isEditableTarget(target: EventTarget | null): boolean {
   return tagName === 'INPUT' || tagName === 'TEXTAREA' || target.isContentEditable;
 }
 
+interface SelectionTransformOverlayProps {
+  frame: SelectionFrame;
+  element: DesignElement;
+  onRotatePointerDown: (event: ReactPointerEvent<SVGCircleElement>, element: DesignElement) => void;
+  onResizePointerDown: (
+    event: ReactPointerEvent<SVGCircleElement>,
+    element: DesignElement,
+    corner: ResizeCorner,
+  ) => void;
+}
+
+function SelectionTransformOverlay({
+  frame,
+  element,
+  onRotatePointerDown,
+  onResizePointerDown,
+}: SelectionTransformOverlayProps) {
+  return (
+    <g data-selection-overlay="true">
+      <rect
+        data-selection-box="true"
+        x={frame.rectX}
+        y={frame.rectY}
+        width={frame.rectWidth}
+        height={frame.rectHeight}
+        rx={1.5}
+        fill="none"
+        stroke="var(--md-sys-color-primary)"
+        strokeWidth={0.45}
+        strokeDasharray="1.5, 1"
+        style={{ pointerEvents: 'none' }}
+      />
+      <line
+        x1={frame.center.x}
+        y1={frame.rectY}
+        x2={frame.rotateHandlePos.x}
+        y2={frame.rotateHandlePos.y}
+        stroke="var(--md-sys-color-primary)"
+        strokeWidth={0.45}
+        style={{ pointerEvents: 'none' }}
+      />
+      <circle
+        data-testid="handle-rotate"
+        aria-label="Rotate element"
+        cx={frame.rotateHandlePos.x}
+        cy={frame.rotateHandlePos.y}
+        r={ROTATE_HANDLE_RADIUS_MM}
+        fill="var(--md-sys-color-primary)"
+        stroke="#ffffff"
+        strokeWidth={0.55}
+        onPointerDown={(event) => onRotatePointerDown(event, element)}
+        style={{ cursor: 'grab', pointerEvents: 'all' }}
+      />
+      {RESIZE_CORNERS.map((corner) => {
+        const cornerPoint = frame.corners[corner];
+        return (
+          <circle
+            key={corner}
+            data-testid={`handle-resize-${corner}`}
+            aria-label={`Resize ${corner.toUpperCase()} corner`}
+            cx={cornerPoint.x}
+            cy={cornerPoint.y}
+            r={CORNER_HANDLE_RADIUS_MM}
+            fill="#ffffff"
+            stroke="var(--md-sys-color-primary)"
+            strokeWidth={0.55}
+            onPointerDown={(event) => onResizePointerDown(event, element, corner)}
+            style={{ cursor: CORNER_CURSORS[corner], pointerEvents: 'all' }}
+          />
+        );
+      })}
+    </g>
+  );
+}
+
 export function DielineStage({ dimensions }: DielineStageProps) {
   const stageRef = useRef<HTMLDivElement | null>(null);
   const hasAutoFittedRef = useRef(false);
   const dragOriginRef = useRef<{ clientX: number; clientY: number; pan: Point } | null>(null);
-  const activeElementDragRef = useRef<ActiveElementDrag | null>(null);
+  const activeInteractionRef = useRef<ActiveTransformInteraction | null>(null);
+  const viewportRef = useRef<StageViewport>({ zoom: 1, pan: { x: 0, y: 0 } });
 
   const storeDieline = useEditorStore((state) => state.dieline);
   const elements = useEditorStore((state) => state.elements);
@@ -80,6 +194,10 @@ export function DielineStage({ dimensions }: DielineStageProps) {
   const [isSpacePressed, setIsSpacePressed] = useState(false);
   const [isPanning, setIsPanning] = useState(false);
   const [draggingElementId, setDraggingElementId] = useState<string | null>(null);
+
+  useEffect(() => {
+    viewportRef.current = viewport;
+  }, [viewport]);
 
   const dieline = useMemo(
     () => (dimensions ? generateTuckEndBox(dimensions) : storeDieline),
@@ -311,65 +429,115 @@ export function DielineStage({ dimensions }: DielineStageProps) {
     };
   }, [isPanning]);
 
-  // Track 2D artwork element Pointer Events drag in mm, committing only on pointerup
+  // Track 2D artwork pointer interactions (move, rotate via atan2, or corner resize) in mm
   useEffect(() => {
     if (!draggingElementId) {
       return;
     }
 
-    const computeDraggedPosition = (drag: ActiveElementDrag, clientX: number, clientY: number) => {
-      const dxMm = screenDeltaPxToMm(clientX - drag.startClientX, drag.zoomAtStart);
-      const dyMm = screenDeltaPxToMm(clientY - drag.startClientY, drag.zoomAtStart);
-      return clampElementPositionToFace(
-        drag.element,
-        drag.startXMm + dxMm,
-        drag.startYMm + dyMm,
-        drag.faceBounds,
+    const computeMovePatch = (
+      interaction: Extract<ActiveTransformInteraction, { kind: 'move' }>,
+      clientX: number,
+      clientY: number,
+    ) => {
+      const dxMm = screenDeltaPxToMm(clientX - interaction.startClientX, interaction.zoomAtStart);
+      const dyMm = screenDeltaPxToMm(clientY - interaction.startClientY, interaction.zoomAtStart);
+      const nextPos = clampElementPositionToFace(
+        interaction.element,
+        interaction.startXMm + dxMm,
+        interaction.startYMm + dyMm,
+        interaction.faceBounds,
+      );
+      return { transform: { x: nextPos.x, y: nextPos.y } };
+    };
+
+    const getSvgPointerMm = (clientX: number, clientY: number): Point => {
+      const stageRect = stageRef.current?.getBoundingClientRect() ?? { left: 0, top: 0 };
+      return clientPointToSvgMm(clientX, clientY, stageRect, viewportRef.current);
+    };
+
+    const computeInteractionPatch = (
+      interaction: ActiveTransformInteraction,
+      clientX: number,
+      clientY: number,
+    ) => {
+      if (interaction.kind === 'move') {
+        return computeMovePatch(interaction, clientX, clientY);
+      }
+      const pointerMm = getSvgPointerMm(clientX, clientY);
+      if (interaction.kind === 'rotate') {
+        return {
+          transform: {
+            rotation: computeRotationDegreesFromPointer(interaction.center, pointerMm),
+          },
+        };
+      }
+      return computeCornerResizePatch(
+        interaction.element,
+        interaction.corner,
+        pointerMm,
+        interaction.snapshot,
+        interaction.faceBounds,
       );
     };
 
-    const isMatchingPointer = (drag: ActiveElementDrag, pointerId: number | undefined): boolean =>
-      drag.pointerId === undefined || pointerId === undefined || drag.pointerId === pointerId;
+    const getTargetElementId = (interaction: ActiveTransformInteraction): string =>
+      interaction.kind === 'rotate' ? interaction.elementId : interaction.element.id;
+
+    const isMatchingPointer = (
+      interaction: ActiveTransformInteraction,
+      pointerId: number | undefined,
+    ): boolean =>
+      interaction.pointerId === undefined ||
+      pointerId === undefined ||
+      interaction.pointerId === pointerId;
 
     const handlePointerMove = (event: PointerEvent) => {
-      const drag = activeElementDragRef.current;
-      if (!drag || !isMatchingPointer(drag, event.pointerId)) {
+      const interaction = activeInteractionRef.current;
+      if (!interaction || !isMatchingPointer(interaction, event.pointerId)) {
         return;
       }
       if (
-        event.clientX === drag.startClientX &&
-        event.clientY === drag.startClientY &&
-        !drag.hasMoved
+        interaction.kind === 'move' &&
+        event.clientX === interaction.startClientX &&
+        event.clientY === interaction.startClientY &&
+        !interaction.hasMoved
       ) {
         return;
       }
-      drag.hasMoved = true;
-      const nextPos = computeDraggedPosition(drag, event.clientX, event.clientY);
-      updateElement(drag.element.id, { transform: { x: nextPos.x, y: nextPos.y } }, false);
+      interaction.hasMoved = true;
+      updateElement(
+        getTargetElementId(interaction),
+        computeInteractionPatch(interaction, event.clientX, event.clientY),
+        false,
+      );
     };
 
     const handlePointerFinish = (event: PointerEvent) => {
-      const drag = activeElementDragRef.current;
-      if (!drag || !isMatchingPointer(drag, event.pointerId)) {
+      const interaction = activeInteractionRef.current;
+      if (!interaction || !isMatchingPointer(interaction, event.pointerId)) {
         return;
       }
-      activeElementDragRef.current = null;
+      activeInteractionRef.current = null;
       setDraggingElementId(null);
 
-      if (drag.hasMoved) {
-        const finalPos = computeDraggedPosition(drag, event.clientX, event.clientY);
-        updateElement(drag.element.id, { transform: { x: finalPos.x, y: finalPos.y } }, true);
+      if (interaction.hasMoved) {
+        updateElement(
+          getTargetElementId(interaction),
+          computeInteractionPatch(interaction, event.clientX, event.clientY),
+          true,
+        );
       }
     };
 
     const handleWindowBlur = () => {
-      const drag = activeElementDragRef.current;
-      if (!drag) {
+      const interaction = activeInteractionRef.current;
+      if (!interaction) {
         return;
       }
-      activeElementDragRef.current = null;
+      activeInteractionRef.current = null;
       setDraggingElementId(null);
-      if (drag.hasMoved) {
+      if (interaction.hasMoved) {
         commitElements();
       }
     };
@@ -400,7 +568,8 @@ export function DielineStage({ dimensions }: DielineStageProps) {
     selectElement(element.id);
 
     const faceBounds = faceBoundsMap.get(element.faceId) ?? fallbackFaceBounds;
-    activeElementDragRef.current = {
+    activeInteractionRef.current = {
+      kind: 'move',
       element,
       pointerId: event.pointerId,
       startClientX: event.clientX,
@@ -408,6 +577,59 @@ export function DielineStage({ dimensions }: DielineStageProps) {
       startXMm: element.transform.x,
       startYMm: element.transform.y,
       zoomAtStart: viewport.zoom,
+      faceBounds,
+      hasMoved: false,
+    };
+    setDraggingElementId(element.id);
+  };
+
+  const handleRotatePointerDown = (
+    event: ReactPointerEvent<SVGCircleElement>,
+    element: DesignElement,
+  ) => {
+    if (isSpacePressed || (event.pointerType === 'mouse' && event.button !== 0)) {
+      return;
+    }
+
+    event.stopPropagation();
+    event.preventDefault();
+    selectElement(element.id);
+
+    const frame = getElementSelectionFrame(element);
+    activeInteractionRef.current = {
+      kind: 'rotate',
+      elementId: element.id,
+      pointerId: event.pointerId,
+      center: frame.center,
+      hasMoved: false,
+    };
+    setDraggingElementId(element.id);
+  };
+
+  const handleResizePointerDown = (
+    event: ReactPointerEvent<SVGCircleElement>,
+    element: DesignElement,
+    corner: ResizeCorner,
+  ) => {
+    if (
+      isSpacePressed ||
+      (event.pointerType === 'mouse' && event.button !== 0) ||
+      (element.type !== 'text' && element.type !== 'image')
+    ) {
+      return;
+    }
+
+    event.stopPropagation();
+    event.preventDefault();
+    selectElement(element.id);
+
+    const faceBounds = faceBoundsMap.get(element.faceId) ?? fallbackFaceBounds;
+    activeInteractionRef.current = {
+      kind: 'resize',
+      element,
+      corner,
+      pointerId: event.pointerId,
+      snapshot: createResizeSnapshot(element),
       faceBounds,
       hasMoved: false,
     };
@@ -526,6 +748,11 @@ export function DielineStage({ dimensions }: DielineStageProps) {
                 : draggingElementId === el.id
                   ? 'grabbing'
                   : 'move';
+              const frame = getElementSelectionFrame(el);
+              const rotationTransform =
+                el.transform.rotation !== 0
+                  ? `rotate(${el.transform.rotation} ${frame.center.x} ${frame.center.y})`
+                  : undefined;
 
               if (el.type === 'image') {
                 return (
@@ -533,6 +760,7 @@ export function DielineStage({ dimensions }: DielineStageProps) {
                     key={el.id}
                     data-testid={`stage-image-${el.id}`}
                     data-element-id={el.id}
+                    transform={rotationTransform}
                     onPointerDown={(event) => handleElementPointerDown(event, el)}
                     onMouseDown={(event) => {
                       if (event.button === 0 && !isSpacePressed) {
@@ -552,18 +780,11 @@ export function DielineStage({ dimensions }: DielineStageProps) {
                       style={{ pointerEvents: 'all' }}
                     />
                     {isSelected && (
-                      <rect
-                        data-selection-box="true"
-                        x={el.transform.x - 1.5}
-                        y={el.transform.y - 1.5}
-                        width={el.transform.width + 3}
-                        height={el.transform.height + 3}
-                        rx={1.5}
-                        fill="none"
-                        stroke="var(--md-sys-color-primary)"
-                        strokeWidth={0.45}
-                        strokeDasharray="1.5, 1"
-                        style={{ pointerEvents: 'none' }}
+                      <SelectionTransformOverlay
+                        frame={frame}
+                        element={el}
+                        onRotatePointerDown={handleRotatePointerDown}
+                        onResizePointerDown={handleResizePointerDown}
                       />
                     )}
                   </g>
@@ -571,16 +792,12 @@ export function DielineStage({ dimensions }: DielineStageProps) {
               }
 
               if (el.type === 'text') {
-                const boxWidth = Math.max(
-                  el.transform.width,
-                  el.content.length * el.style.fontSize * 0.62,
-                );
-                const boxHeight = el.style.fontSize * 1.45;
                 return (
                   <g
                     key={el.id}
                     data-testid={`stage-text-${el.id}`}
                     data-element-id={el.id}
+                    transform={rotationTransform}
                     onPointerDown={(event) => handleElementPointerDown(event, el)}
                     onMouseDown={(event) => {
                       if (event.button === 0 && !isSpacePressed) {
@@ -589,21 +806,6 @@ export function DielineStage({ dimensions }: DielineStageProps) {
                     }}
                     style={{ cursor: elementCursor }}
                   >
-                    {isSelected && (
-                      <rect
-                        data-selection-box="true"
-                        x={el.transform.x - boxWidth * 0.5 - 3}
-                        y={el.transform.y - boxHeight * 0.5}
-                        width={boxWidth + 6}
-                        height={boxHeight}
-                        rx={1.5}
-                        fill="none"
-                        stroke="var(--md-sys-color-primary)"
-                        strokeWidth={0.45}
-                        strokeDasharray="1.5, 1"
-                        style={{ pointerEvents: 'none' }}
-                      />
-                    )}
                     <text
                       x={el.transform.x}
                       y={el.transform.y}
@@ -618,6 +820,14 @@ export function DielineStage({ dimensions }: DielineStageProps) {
                     >
                       {el.content}
                     </text>
+                    {isSelected && (
+                      <SelectionTransformOverlay
+                        frame={frame}
+                        element={el}
+                        onRotatePointerDown={handleRotatePointerDown}
+                        onResizePointerDown={handleResizePointerDown}
+                      />
+                    )}
                   </g>
                 );
               }

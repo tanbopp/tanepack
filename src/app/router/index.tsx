@@ -6,12 +6,18 @@ import { AppShell } from '@widgets/app-shell/AppShell';
 import { M3CircularProgress } from '@shared/ui';
 
 const HomePage = lazy(() => import('@pages/home/HomePage'));
+const DashboardPage = lazy(() => import('@pages/dashboard/DashboardPage'));
 const EditorPage = lazy(() => import('@pages/editor/EditorPage'));
 const NotFoundPage = lazy(() => import('@pages/not-found/NotFoundPage'));
 
 const homeHandle: RouteMetaHandle = {
   title: 'Tanepack',
   showBackButton: false,
+};
+
+const dashboardHandle: RouteMetaHandle = {
+  title: 'Tanepack — My Designs',
+  showBackButton: true,
 };
 
 const editorHandle: RouteMetaHandle = {
@@ -38,6 +44,15 @@ const router = createBrowserRouter(
             </Suspense>
           ),
           handle: homeHandle,
+        },
+        {
+          path: ROUTES.DASHBOARD,
+          element: (
+            <Suspense fallback={<M3CircularProgress />}>
+              <DashboardPage />
+            </Suspense>
+          ),
+          handle: dashboardHandle,
         },
         {
           path: ROUTES.EDITOR,

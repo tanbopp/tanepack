@@ -120,7 +120,7 @@ describe('EditorPage', () => {
     renderEditorPage();
 
     // Top App Bar
-    expect(screen.getByRole('button', { name: 'Back to home' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Back to dashboard' })).toBeTruthy();
     expect(screen.getByText('Untitled Box')).toBeTruthy();
     expect(screen.getByText('Saved')).toBeTruthy();
     const exportButton = screen.getByRole('button', { name: /Export/i }) as HTMLButtonElement;
@@ -367,5 +367,39 @@ describe('EditorPage', () => {
       'Save status: Error',
     );
     expect(consoleErrorSpy).toHaveBeenCalled();
+  });
+
+  it('updates text color, fontSize slider (4-72 mm), fontWeight dropdown, and inline project name', async () => {
+    renderEditorPage(`/editor?id=${TEST_PROJECT_ID}`);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add Text' }));
+    expect(screen.getByTestId('text-properties-panel')).toBeTruthy();
+
+    // Color picker update
+    const colorInput = screen.getByLabelText('Text Color') as HTMLInputElement;
+    fireEvent.change(colorInput, { target: { value: '#c62828' } });
+    fireEvent.blur(colorInput);
+    const svg = screen.getByTestId('dieline-svg');
+    expect(svg.querySelector('[data-layer="artwork"] text')?.getAttribute('fill')).toBe('#c62828');
+
+    // Font Size slider update (14 -> 28 mm)
+    const fontSizeSlider = screen.getByRole('slider', { name: 'Font Size' });
+    fireEvent.change(fontSizeSlider, { target: { value: 28 } });
+    expect(screen.getByTestId('font-size-value').textContent).toBe('28 mm');
+    expect(svg.querySelector('[data-layer="artwork"] text')?.getAttribute('font-size')).toBe('28');
+
+    // Font Weight dropdown (700 -> 400)
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Font Weight' }));
+    fireEvent.click(screen.getByRole('option', { name: 'Regular (400)' }));
+    expect(svg.querySelector('[data-layer="artwork"] text')?.getAttribute('font-weight')).toBe(
+      '400',
+    );
+
+    // Inline project rename
+    fireEvent.click(screen.getByRole('button', { name: 'Rename project' }));
+    const renameInput = screen.getByLabelText('Project name') as HTMLInputElement;
+    fireEvent.change(renameInput, { target: { value: 'Tea Gift Carton' } });
+    fireEvent.keyDown(renameInput, { key: 'Enter', code: 'Enter' });
+    expect(screen.getByText('Tea Gift Carton')).toBeTruthy();
   });
 });

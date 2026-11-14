@@ -8,6 +8,7 @@ import {
   clampZoom,
   computeFitViewport,
   DielineStage,
+  getElementSelectionFrame,
   MAX_STAGE_ZOOM,
   MIN_STAGE_ZOOM,
   screenDeltaPxToMm,
@@ -240,5 +241,78 @@ describe('DielineStage component', () => {
     const movedImg = useEditorStore.getState().committedElements.find((e) => e.id === addedImg.id)!;
     expect(movedImg.transform.x).toBeCloseTo(initialImgX - 8, 1);
     expect(movedImg.transform.y).toBeCloseTo(initialImgY + 14, 1);
+  });
+
+  it('renders 4 corner resize handles and top rotate handle when selected, rotating via atan2 and resizing proportionally', () => {
+    const addedText = useEditorStore.getState().addElement();
+    render(<DielineStage />);
+
+    expect(screen.getByTestId('handle-rotate')).toBeTruthy();
+    expect(screen.getByTestId('handle-resize-nw')).toBeTruthy();
+    expect(screen.getByTestId('handle-resize-ne')).toBeTruthy();
+    expect(screen.getByTestId('handle-resize-se')).toBeTruthy();
+    expect(screen.getByTestId('handle-resize-sw')).toBeTruthy();
+
+    const frame = getElementSelectionFrame(addedText);
+    const rotateHandle = screen.getByTestId('handle-rotate');
+
+    // Drag rotation handle directly right of element center -> 90° clockwise
+    const rightOfCenterClientX = (frame.center.x + 25) * PX_PER_MM;
+    const rightOfCenterClientY = frame.center.y * PX_PER_MM;
+    fireEvent.pointerDown(rotateHandle, {
+      pointerId: 3,
+      button: 0,
+      clientX: frame.center.x * PX_PER_MM,
+      clientY: (frame.center.y - 25) * PX_PER_MM,
+    });
+    fireEvent.pointerMove(window, {
+      pointerId: 3,
+      clientX: rightOfCenterClientX,
+      clientY: rightOfCenterClientY,
+    });
+
+    const rotatingLive = useEditorStore.getState().elements.find((e) => e.id === addedText.id)!;
+    expect(rotatingLive.transform.rotation).toBeCloseTo(90, 1);
+    expect(useEditorStore.getState().committedElements[0]?.transform.rotation).toBe(0);
+
+    fireEvent.pointerUp(window, {
+      pointerId: 3,
+      clientX: rightOfCenterClientX,
+      clientY: rightOfCenterClientY,
+    });
+    const rotatedCommitted = useEditorStore
+      .getState()
+      .committedElements.find((e) => e.id === addedText.id)!;
+    expect(rotatedCommitted.transform.rotation).toBeCloseTo(90, 1);
+    expect(screen.getByTestId(`stage-text-${addedText.id}`).getAttribute('transform')).toBe(
+      `rotate(90 ${frame.center.x} ${frame.center.y})`,
+    );
+
+    // Drag SE corner handle outward on rotated text -> increases fontSize cleanly
+    const currentText = useEditorStore.getState().elements.find((e) => e.id === addedText.id)!;
+    const currentFrame = getElementSelectionFrame(currentText);
+    const initialFontSize = currentText.type === 'text' ? currentText.style.fontSize : 14;
+    const seHandle = screen.getByTestId('handle-resize-se');
+
+    // Rotated 90deg clockwise: local (+dx, +dy) corresponds to stage (-dy, +dx)
+    const doubleX = (currentFrame.center.x - currentFrame.rectHeight * 0.5 * 2) * PX_PER_MM;
+    const doubleY = (currentFrame.center.y + currentFrame.rectWidth * 0.5 * 2) * PX_PER_MM;
+
+    fireEvent.pointerDown(seHandle, {
+      pointerId: 4,
+      button: 0,
+      clientX: currentFrame.center.x * PX_PER_MM,
+      clientY: currentFrame.center.y * PX_PER_MM,
+    });
+    fireEvent.pointerMove(window, { pointerId: 4, clientX: doubleX, clientY: doubleY });
+    fireEvent.pointerUp(window, { pointerId: 4, clientX: doubleX, clientY: doubleY });
+
+    const resizedCommitted = useEditorStore
+      .getState()
+      .committedElements.find((e) => e.id === addedText.id)!;
+    expect(resizedCommitted.type).toBe('text');
+    if (resizedCommitted.type === 'text') {
+      expect(resizedCommitted.style.fontSize).toBeGreaterThan(initialFontSize);
+    }
   });
 });

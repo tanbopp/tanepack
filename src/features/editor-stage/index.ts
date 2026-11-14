@@ -12,6 +12,23 @@ export {
   useEditorStore,
 } from './store';
 export {
+  clientPointToSvgMm,
+  computeCornerResizePatch,
+  computeRotationDegreesFromPointer,
+  computeTextFontSizePatch,
+  createResizeSnapshot,
+  getElementSelectionFrame,
+  MAX_TEXT_FONT_SIZE_MM,
+  MIN_IMAGE_SIZE_MM,
+  MIN_TEXT_FONT_SIZE_MM,
+  RESIZE_CORNERS,
+  type ResizeCorner,
+  type ResizeElementPatch,
+  type ResizeStartSnapshot,
+  ROTATE_HANDLE_OFFSET_MM,
+  type SelectionFrame,
+} from './transform';
+export {
   clampElementPositionToFace,
   clampZoom,
   computeFitViewport,

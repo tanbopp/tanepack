@@ -2,10 +2,13 @@
 export {
   buildProjectDocument,
   type BuildProjectDocumentParams,
+  buildProjectThumbnailDataUrl,
   DEFAULT_PROJECT_NAME,
   fetchProject,
+  fetchUserProjects,
   isValidProjectDocument,
   PROJECTS_TABLE,
+  type ProjectSummary,
   saveProject,
 } from '@entities/design-document/api';
 export type {

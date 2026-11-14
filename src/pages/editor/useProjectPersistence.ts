@@ -1,6 +1,6 @@
 // TanStack Query cloud sync, URL UUID resolution, Zustand hydration, and debounced auto-save
-import { useMutation, useQuery } from '@tanstack/react-query';
-import { useEffect, useRef, useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useEditorStore } from '@features/editor-stage';
 import {
@@ -25,16 +25,20 @@ export interface ProjectPersistenceState {
   projectName: string;
   saveStatus: CloudSaveStatus;
   statusErrorMessage: string | null;
+  renameProject: (nextName: string) => void;
+  flushPendingSave: () => Promise<void>;
 }
 
 interface EditorSnapshot {
   dieline: Dieline;
   committedElements: DesignElement[];
+  name: string;
 }
 
 interface SaveMutationVariables {
   projectId: string;
   guestId: string;
+  name: string;
   dieline: Dieline;
   committedElements: DesignElement[];
 }
@@ -48,6 +52,7 @@ export function resetProjectPersistenceTracking(): void {
 
 /** Coordinates Supabase project hydration and 2s debounced auto-save for the active editor store. */
 export function useProjectPersistence(): ProjectPersistenceState {
+  const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
   const urlProjectId = searchParams.get('id');
   const [fallbackProjectId] = useState<string>(() => createUuid());
@@ -59,15 +64,22 @@ export function useProjectPersistence(): ProjectPersistenceState {
   const dieline = useEditorStore((state) => state.dieline);
   const committedElements = useEditorStore((state) => state.committedElements);
 
-  const projectNameRef = useRef(DEFAULT_PROJECT_NAME);
+  const [nameOverride, setNameOverride] = useState<{ projectId: string; name: string } | null>(
+    null,
+  );
+  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const projectCreatedAtRef = useRef(new Date().toISOString());
   const insideElementsRef = useRef<DesignElement[]>([]);
   const hydratedProjectIdRef = useRef<string | null>(null);
   const syncedSnapshotRef = useRef<EditorSnapshot>({
     dieline,
     committedElements,
+    name: DEFAULT_PROJECT_NAME,
   });
-  const initialMountSnapshotRef = useRef<EditorSnapshot>({
+  const initialMountSnapshotRef = useRef<{
+    dieline: Dieline;
+    committedElements: DesignElement[];
+  }>({
     dieline,
     committedElements,
   });
@@ -93,14 +105,16 @@ export function useProjectPersistence(): ProjectPersistenceState {
     if (lastEditorProjectId !== null && lastEditorProjectId !== projectId) {
       useEditorStore.getState().reset();
       const freshState = useEditorStore.getState();
-      const freshSnapshot: EditorSnapshot = {
+      syncedSnapshotRef.current = {
+        dieline: freshState.dieline,
+        committedElements: freshState.committedElements,
+        name: DEFAULT_PROJECT_NAME,
+      };
+      initialMountSnapshotRef.current = {
         dieline: freshState.dieline,
         committedElements: freshState.committedElements,
       };
-      syncedSnapshotRef.current = freshSnapshot;
-      initialMountSnapshotRef.current = freshSnapshot;
       hydratedProjectIdRef.current = null;
-      projectNameRef.current = DEFAULT_PROJECT_NAME;
       projectCreatedAtRef.current = new Date().toISOString();
       insideElementsRef.current = [];
     }
@@ -152,13 +166,13 @@ export function useProjectPersistence(): ProjectPersistenceState {
     const outsideElements = loaded.layers.outside;
 
     hydratedProjectIdRef.current = projectId;
-    projectNameRef.current = nextName;
     projectCreatedAtRef.current = loaded.createdAt || new Date().toISOString();
     insideElementsRef.current = loaded.layers.inside;
 
     syncedSnapshotRef.current = {
       dieline: loaded.dieline,
       committedElements: outsideElements,
+      name: nextName,
     };
 
     useEditorStore.setState({
@@ -169,11 +183,16 @@ export function useProjectPersistence(): ProjectPersistenceState {
     });
   }, [projectId, projectQuery.data, projectQuery.isSuccess]);
 
+  const projectName =
+    nameOverride?.projectId === projectId
+      ? nameOverride.name
+      : projectQuery.data?.name.trim() || DEFAULT_PROJECT_NAME;
+
   const saveMutation = useMutation({
     mutationFn: async (variables: SaveMutationVariables) => {
       const payload = buildProjectDocument({
         id: variables.projectId,
-        name: projectNameRef.current,
+        name: variables.name,
         createdAt: projectCreatedAtRef.current,
         dieline: variables.dieline,
         outsideElements: variables.committedElements,
@@ -183,20 +202,23 @@ export function useProjectPersistence(): ProjectPersistenceState {
 
       return saveProject(variables.projectId, payload, variables.guestId);
     },
-    onSuccess: (_saved, variables) => {
+    onSuccess: (saved, variables) => {
       syncedSnapshotRef.current = {
         dieline: variables.dieline,
         committedElements: variables.committedElements,
+        name: saved.name,
       };
+      queryClient.setQueryData(['project', variables.projectId], saved);
+      void queryClient.invalidateQueries({ queryKey: ['projects'] });
     },
     onError: (err) => {
       console.error('Failed to auto-save project to Supabase:', err);
     },
   });
 
-  const { mutate } = saveMutation;
+  const { mutate, mutateAsync } = saveMutation;
 
-  // Debounce cloud writes 2 seconds after committedElements or dieline changes settle
+  // Debounce cloud writes 2 seconds after committedElements, dieline, or projectName changes settle
   useEffect(() => {
     if (!isSupabaseConfigured || !isValidUuid(projectId) || !isValidUuid(guestId)) {
       return;
@@ -207,21 +229,30 @@ export function useProjectPersistence(): ProjectPersistenceState {
     }
 
     const synced = syncedSnapshotRef.current;
-    if (dieline === synced.dieline && committedElements === synced.committedElements) {
+    if (
+      dieline === synced.dieline &&
+      committedElements === synced.committedElements &&
+      projectName === synced.name
+    ) {
       return;
     }
 
-    const timerId = setTimeout(() => {
+    debounceTimerRef.current = setTimeout(() => {
+      debounceTimerRef.current = null;
       mutate({
         projectId,
         guestId,
+        name: projectName,
         dieline,
         committedElements,
       });
     }, AUTO_SAVE_DEBOUNCE_MS);
 
     return () => {
-      clearTimeout(timerId);
+      if (debounceTimerRef.current !== null) {
+        clearTimeout(debounceTimerRef.current);
+        debounceTimerRef.current = null;
+      }
     };
   }, [
     committedElements,
@@ -230,8 +261,51 @@ export function useProjectPersistence(): ProjectPersistenceState {
     isSupabaseConfigured,
     mutate,
     projectId,
+    projectName,
     projectQuery.isFetched,
   ]);
+
+  const renameProject = useCallback(
+    (nextName: string) => {
+      const normalized = nextName.trim() || DEFAULT_PROJECT_NAME;
+      setNameOverride({ projectId, name: normalized });
+    },
+    [projectId],
+  );
+
+  const flushPendingSave = useCallback(async () => {
+    if (debounceTimerRef.current !== null) {
+      clearTimeout(debounceTimerRef.current);
+      debounceTimerRef.current = null;
+    }
+
+    if (!isSupabaseConfigured || !isValidUuid(projectId) || !isValidUuid(guestId)) {
+      return;
+    }
+
+    const state = useEditorStore.getState();
+    const synced = syncedSnapshotRef.current;
+    const isDirty =
+      state.dieline !== synced.dieline ||
+      state.committedElements !== synced.committedElements ||
+      projectName !== synced.name;
+
+    if (!isDirty) {
+      return;
+    }
+
+    try {
+      await mutateAsync({
+        projectId,
+        guestId,
+        name: projectName,
+        dieline: state.dieline,
+        committedElements: state.committedElements,
+      });
+    } catch {
+      // Mutation onError already logs details; do not trap user navigation
+    }
+  }, [guestId, isSupabaseConfigured, mutateAsync, projectId, projectName]);
 
   let saveStatus: CloudSaveStatus = 'saved';
   let statusErrorMessage: string | null = null;
@@ -248,12 +322,12 @@ export function useProjectPersistence(): ProjectPersistenceState {
       projectQuery.error instanceof Error ? projectQuery.error.message : 'Failed to load project';
   }
 
-  const projectName = projectQuery.data?.name.trim() || DEFAULT_PROJECT_NAME;
-
   return {
     projectId,
     projectName,
     saveStatus,
     statusErrorMessage,
+    renameProject,
+    flushPendingSave,
   };
 }

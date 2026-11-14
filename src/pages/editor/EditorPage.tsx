@@ -2,6 +2,10 @@
 import AppBar from '@mui/material/AppBar';
 import Box from '@mui/material/Box';
 import Divider from '@mui/material/Divider';
+import FormControl from '@mui/material/FormControl';
+import InputLabel from '@mui/material/InputLabel';
+import MenuItem from '@mui/material/MenuItem';
+import Select, { type SelectChangeEvent } from '@mui/material/Select';
 import Slider from '@mui/material/Slider';
 import Toolbar from '@mui/material/Toolbar';
 import Typography from '@mui/material/Typography';
@@ -16,7 +20,14 @@ import {
   useState,
 } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { DEFAULT_TEXT_CONTENT, DielineStage, useEditorStore } from '@features/editor-stage';
+import {
+  computeTextFontSizePatch,
+  DEFAULT_TEXT_CONTENT,
+  DielineStage,
+  MAX_TEXT_FONT_SIZE_MM,
+  MIN_TEXT_FONT_SIZE_MM,
+  useEditorStore,
+} from '@features/editor-stage';
 import { exportSvgElementToPngDataUrl, triggerPngDataUrlDownload } from '@shared/lib/exportPng';
 import { loadUploadedImageFile } from '@shared/lib/imageUpload';
 import { M3Button, M3CircularProgress, M3Icon, M3IconButton, M3TextField } from '@shared/ui';
@@ -70,11 +81,14 @@ const LazyBoxViewer = lazy(() =>
 
 export default function EditorPage() {
   const navigate = useNavigate();
-  const { projectName, saveStatus, statusErrorMessage } = useProjectPersistence();
+  const { projectName, saveStatus, statusErrorMessage, renameProject, flushPendingSave } =
+    useProjectPersistence();
   const statusDisplay = SAVE_STATUS_DISPLAY[saveStatus];
   const [selectedTool, setSelectedTool] = useState<EditorRailToolId | null>(null);
   const [viewMode, setViewMode] = useState<EditorViewMode>('2d');
   const [isExporting, setIsExporting] = useState(false);
+  const [isEditingName, setIsEditingName] = useState(false);
+  const [draftProjectName, setDraftProjectName] = useState(projectName);
 
   const commitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -187,6 +201,58 @@ export default function EditorPage() {
     }
   };
 
+  const handleTextColorChange = (nextColor: string) => {
+    if (!selectedElement || selectedElement.type !== 'text') {
+      return;
+    }
+    updateElement(selectedElement.id, { style: { color: nextColor } }, false);
+    clearCommitTimer();
+    commitTimerRef.current = setTimeout(() => {
+      commitElements();
+      commitTimerRef.current = null;
+    }, TEXT_COMMIT_DEBOUNCE_MS);
+  };
+
+  const handleTextFontSizeUpdate = (nextSizeMm: number, commit: boolean) => {
+    if (!selectedElement || selectedElement.type !== 'text') {
+      return;
+    }
+    clearCommitTimer();
+    updateElement(
+      selectedElement.id,
+      computeTextFontSizePatch(selectedElement, nextSizeMm),
+      commit,
+    );
+  };
+
+  const handleTextFontWeightChange = (event: SelectChangeEvent<number>) => {
+    if (!selectedElement || selectedElement.type !== 'text') {
+      return;
+    }
+    const weight = Number(event.target.value) === 700 ? 700 : 400;
+    clearCommitTimer();
+    updateElement(selectedElement.id, { style: { fontWeight: weight } }, true);
+  };
+
+  const handleStartRename = () => {
+    setDraftProjectName(projectName);
+    setIsEditingName(true);
+  };
+
+  const handleCommitRename = () => {
+    setIsEditingName(false);
+    renameProject(draftProjectName);
+  };
+
+  const handleRenameKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'Enter') {
+      handleCommitRename();
+    } else if (event.key === 'Escape') {
+      setIsEditingName(false);
+      setDraftProjectName(projectName);
+    }
+  };
+
   const handleDeleteSelected = () => {
     if (!selectedElement) {
       return;
@@ -195,10 +261,12 @@ export default function EditorPage() {
     removeElement(selectedElement.id);
   };
 
-  const handleNavigateHome = () => {
+  const handleNavigateBack = async () => {
     clearCommitTimer();
+    commitElements();
+    await flushPendingSave();
     resetEditorStore();
-    navigate('/');
+    navigate('/dashboard');
   };
 
   const handleExport = async () => {
@@ -274,10 +342,62 @@ export default function EditorPage() {
           }}
         >
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, minWidth: 0 }}>
-            <M3IconButton icon="arrow_back" label="Back to home" onClick={handleNavigateHome} />
-            <Typography variant="titleMedium" component="h1" noWrap sx={{ fontWeight: 500 }}>
-              {projectName}
-            </Typography>
+            <M3IconButton
+              icon="arrow_back"
+              label="Back to dashboard"
+              tooltip="Back to dashboard"
+              onClick={() => {
+                void handleNavigateBack();
+              }}
+            />
+            {isEditingName ? (
+              <Box
+                component="input"
+                type="text"
+                aria-label="Project name"
+                value={draftProjectName}
+                autoFocus
+                onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                  setDraftProjectName(event.target.value)
+                }
+                onBlur={handleCommitRename}
+                onKeyDown={handleRenameKeyDown}
+                sx={{
+                  px: 1.25,
+                  py: 0.5,
+                  minWidth: 140,
+                  maxWidth: 220,
+                  borderRadius: '8px',
+                  border: '1px solid var(--md-sys-color-primary)',
+                  backgroundColor: 'var(--md-sys-color-surface-container-highest)',
+                  color: 'var(--md-sys-color-on-surface)',
+                  fontFamily: 'inherit',
+                  fontSize: '0.95rem',
+                  fontWeight: 500,
+                  outline: 'none',
+                }}
+              />
+            ) : (
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.25, minWidth: 0 }}>
+                <Typography
+                  variant="titleMedium"
+                  component="h1"
+                  noWrap
+                  onClick={handleStartRename}
+                  sx={{ fontWeight: 500, cursor: 'pointer' }}
+                >
+                  {projectName}
+                </Typography>
+                <M3IconButton
+                  icon="edit"
+                  label="Rename project"
+                  tooltip="Rename project"
+                  size="small"
+                  iconSize={16}
+                  onClick={handleStartRename}
+                />
+              </Box>
+            )}
             <Box
               data-testid="save-status-pill"
               aria-label={`Save status: ${statusDisplay.label}`}
@@ -483,6 +603,7 @@ export default function EditorPage() {
           sx={{
             width: { xs: 240, md: 300 },
             flexShrink: 0,
+            overflowY: 'auto',
             display: 'flex',
             flexDirection: 'column',
             alignItems: 'stretch',
@@ -612,9 +733,135 @@ export default function EditorPage() {
                 placeholder="Enter label text"
               />
 
+              {/* Text Color Picker */}
+              <Box
+                sx={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 1.5,
+                  px: 1.5,
+                  py: 1,
+                  borderRadius: '12px',
+                  backgroundColor: 'var(--md-sys-color-surface-container-highest)',
+                  border: '1px solid var(--md-sys-color-outline-variant)',
+                }}
+              >
+                <Typography
+                  variant="bodySmall"
+                  component="label"
+                  htmlFor="text-color-picker"
+                  color="text.primary"
+                  sx={{ fontWeight: 500 }}
+                >
+                  Text Color
+                </Typography>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <Typography
+                    variant="labelSmall"
+                    color="text.secondary"
+                    sx={{ fontFamily: 'monospace' }}
+                  >
+                    {selectedElement.style.color.toUpperCase()}
+                  </Typography>
+                  <Box
+                    component="input"
+                    id="text-color-picker"
+                    type="color"
+                    aria-label="Text Color"
+                    value={selectedElement.style.color}
+                    onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                      handleTextColorChange(event.target.value)
+                    }
+                    onBlur={handleTextContentCommit}
+                    sx={{
+                      width: 32,
+                      height: 32,
+                      p: 0,
+                      border: '1px solid var(--md-sys-color-outline-variant)',
+                      borderRadius: '8px',
+                      backgroundColor: 'transparent',
+                      cursor: 'pointer',
+                    }}
+                  />
+                </Box>
+              </Box>
+
+              {/* Font Size Slider (4mm - 72mm) */}
+              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
+                <Box
+                  sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}
+                >
+                  <Typography variant="bodySmall" color="text.primary" sx={{ fontWeight: 500 }}>
+                    Font Size
+                  </Typography>
+                  <Typography
+                    variant="labelMedium"
+                    component="span"
+                    data-testid="font-size-value"
+                    sx={{
+                      px: 1.25,
+                      py: 0.25,
+                      borderRadius: '9999px',
+                      fontVariantNumeric: 'tabular-nums',
+                      backgroundColor: 'var(--md-sys-color-secondary-container)',
+                      color: 'var(--md-sys-color-on-secondary-container)',
+                    }}
+                  >
+                    {selectedElement.style.fontSize} mm
+                  </Typography>
+                </Box>
+                <Slider
+                  aria-label="Font Size"
+                  value={Math.min(
+                    MAX_TEXT_FONT_SIZE_MM,
+                    Math.max(MIN_TEXT_FONT_SIZE_MM, selectedElement.style.fontSize),
+                  )}
+                  min={MIN_TEXT_FONT_SIZE_MM}
+                  max={MAX_TEXT_FONT_SIZE_MM}
+                  step={0.5}
+                  valueLabelDisplay="auto"
+                  valueLabelFormat={(value) => `${value} mm`}
+                  onChange={(_, nextValue) => {
+                    const numeric = Array.isArray(nextValue) ? (nextValue[0] ?? 14) : nextValue;
+                    handleTextFontSizeUpdate(numeric, false);
+                  }}
+                  onChangeCommitted={(_, nextValue) => {
+                    const numeric = Array.isArray(nextValue) ? (nextValue[0] ?? 14) : nextValue;
+                    handleTextFontSizeUpdate(numeric, true);
+                  }}
+                  sx={{
+                    color: 'var(--md-sys-color-primary)',
+                    '& .MuiSlider-rail': {
+                      opacity: 0.35,
+                      backgroundColor: 'var(--md-sys-color-outline-variant)',
+                    },
+                  }}
+                />
+              </Box>
+
+              {/* Font Weight Select (400 / 700) */}
+              <FormControl size="small" fullWidth>
+                <InputLabel id="text-font-weight-label">Font Weight</InputLabel>
+                <Select<number>
+                  labelId="text-font-weight-label"
+                  id="text-font-weight-select"
+                  label="Font Weight"
+                  value={selectedElement.style.fontWeight >= 600 ? 700 : 400}
+                  onChange={handleTextFontWeightChange}
+                  sx={{
+                    borderRadius: '12px',
+                    backgroundColor: 'var(--md-sys-color-surface-container-highest)',
+                  }}
+                >
+                  <MenuItem value={400}>Regular (400)</MenuItem>
+                  <MenuItem value={700}>Bold (700)</MenuItem>
+                </Select>
+              </FormControl>
+
               <Typography variant="bodySmall" color="text.secondary">
-                Drag or edit to update the 2D sheet live; changes bake onto the {selectedFaceName}{' '}
-                face in 3D once committed.
+                Rotation: {Math.round(selectedElement.transform.rotation)}° • Drag handles to resize
+                or rotate; changes bake onto the {selectedFaceName} face in 3D once committed.
               </Typography>
             </Box>
           ) : selectedElement && selectedElement.type === 'image' ? (

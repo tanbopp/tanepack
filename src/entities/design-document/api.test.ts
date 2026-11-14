@@ -3,7 +3,13 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { generateTuckEndBox } from '@entities/dieline';
 import * as supabaseLib from '@shared/lib/supabase';
-import { buildProjectDocument, DEFAULT_PROJECT_NAME, fetchProject, saveProject } from './api';
+import {
+  buildProjectDocument,
+  DEFAULT_PROJECT_NAME,
+  fetchProject,
+  fetchUserProjects,
+  saveProject,
+} from './api';
 
 const PROJECT_ID = '11111111-1111-4111-8111-111111111111';
 const GUEST_ID = '22222222-2222-4222-8222-222222222222';
@@ -119,6 +125,64 @@ describe('design-document persistence API', () => {
 
     await expect(saveProject(PROJECT_ID, sample, GUEST_ID)).rejects.toThrow(
       /violates row-level security policy/,
+    );
+  });
+
+  it('lists saved projects for a guest UUID ordered by updated_at descending via fetchUserProjects', async () => {
+    const sample = createSampleProject('Mint Carton');
+    const order = vi.fn().mockResolvedValue({
+      data: [
+        {
+          id: PROJECT_ID,
+          user_id: GUEST_ID,
+          name: 'Mint Carton',
+          thumbnail_url: 'data:image/svg+xml;utf8,%3Csvg%3E%3C/svg%3E',
+          created_at: '2026-11-14T16:00:00.000Z',
+          updated_at: '2026-11-14T16:05:00.000Z',
+          design_json: sample,
+        },
+      ],
+      error: null,
+    });
+    const eq = vi.fn().mockReturnValue({ order });
+    const select = vi.fn().mockReturnValue({ eq });
+    const from = vi.fn().mockReturnValue({ select });
+    vi.spyOn(supabaseLib, 'createSupabaseClient').mockReturnValue({
+      from,
+    } as unknown as SupabaseClient);
+
+    const rows = await fetchUserProjects(GUEST_ID);
+
+    expect(from).toHaveBeenCalledWith('projects');
+    expect(select).toHaveBeenCalledWith('*');
+    expect(eq).toHaveBeenCalledWith('user_id', GUEST_ID);
+    expect(order).toHaveBeenCalledWith('updated_at', { ascending: false });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      id: PROJECT_ID,
+      userId: GUEST_ID,
+      name: 'Mint Carton',
+      updatedAt: '2026-11-14T16:05:00.000Z',
+    });
+    expect(rows[0]?.designJson?.id).toBe(PROJECT_ID);
+  });
+
+  it('includes a compact SVG thumbnail data URL when saving a project', async () => {
+    const sample = createSampleProject('Logo Box');
+    const upsert = vi.fn().mockResolvedValue({ error: null });
+    const from = vi.fn().mockReturnValue({ upsert });
+    vi.spyOn(supabaseLib, 'createSupabaseClient').mockReturnValue({
+      from,
+    } as unknown as SupabaseClient);
+
+    const saved = await saveProject(PROJECT_ID, sample, GUEST_ID);
+
+    expect(saved.metadata.thumbnail).toMatch(/^data:image\/svg\+xml;utf8,/);
+    expect(upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        thumbnail_url: expect.stringMatching(/^data:image\/svg\+xml;utf8,/),
+      }),
+      { onConflict: 'id' },
     );
   });
 });

@@ -27,9 +27,14 @@ export default function HomePage() {
       <Typography variant="bodyLarge" color="text.secondary" sx={{ mb: 1 }}>
         Packaging design for everyone.
       </Typography>
-      <M3Button m3Variant="filled" onClick={() => navigate('/editor')}>
-        Open Editor
-      </M3Button>
+      <Box sx={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: 1.5 }}>
+        <M3Button m3Variant="filled" onClick={() => navigate('/dashboard')}>
+          My Designs
+        </M3Button>
+        <M3Button m3Variant="tonal" onClick={() => navigate('/editor')}>
+          Open Editor
+        </M3Button>
+      </Box>
     </Box>
   );
 }
