@@ -1,18 +1,27 @@
-// Type-level and stub contract test for parametric dieline entities
+// Type-level and unit contract tests for parametric dieline entities
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import { generateTuckEndBox, type Dieline, type Unit } from '@entities/dieline';
 
 describe('dieline entity types', () => {
-  it('enforces ISO millimeter dimensions and throws on Step 2 stub', () => {
+  it('enforces ISO millimeter dimensions and returns tuck-end dieline contract', () => {
     expectTypeOf<Dieline['unit']>().toEqualTypeOf<Unit>();
-    expect(() =>
-      generateTuckEndBox({
-        length: 120,
-        width: 60,
-        height: 160,
-        thickness: 0.5,
-        bleedSize: 3,
-      }),
-    ).toThrow('Not implemented — see Step 2 prompt');
+
+    const dieline = generateTuckEndBox({
+      length: 120,
+      width: 60,
+      height: 160,
+      thickness: 0.5,
+      bleedSize: 3,
+    });
+
+    expect(dieline.archetype).toBe('tuck-end');
+    expect(dieline.unit).toBe('mm');
+    expect(dieline.dimensions).toEqual({
+      length: 120,
+      width: 60,
+      height: 160,
+      thickness: 0.5,
+      bleedSize: 3,
+    });
   });
 });

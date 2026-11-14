@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-17 -17 351 265.5" width="351mm" height="265.5mm">
+  <rect x="-1000" y="-1000" width="3000" height="3000" fill="#ffffff" />
+  <text x="0" y="-8" font-family="sans-serif" font-size="4.2" font-weight="600" fill="#211a13">Tanepack Tuck-End Dieline — 100 × 50 × 100 mm (t=0.5 mm, bleed=3 mm) | Span: 317 × 231.5 mm</text>
+  <g id="faces">
+    <path d="M 65.5,65.5 L 166,65.5 L 166,166 L 65.5,166 Z" fill="#efe3d2" fill-opacity="0.75" stroke="none" />
+    <text x="115.75" y="115.75" font-family="sans-serif" font-size="3.6" fill="#4e3d28" text-anchor="middle" dominant-baseline="middle">Front</text>
+    <path d="M 166,65.5 L 216.5,65.5 L 216.5,166 L 166,166 Z" fill="#f7f1e8" fill-opacity="0.75" stroke="none" />
+    <text x="191.25" y="115.75" font-family="sans-serif" font-size="3.6" fill="#4e3d28" text-anchor="middle" dominant-baseline="middle">Right Side</text>
+    <path d="M 216.5,65.5 L 317,65.5 L 317,166 L 216.5,166 Z" fill="#f7f1e8" fill-opacity="0.75" stroke="none" />
+    <text x="266.75" y="115.75" font-family="sans-serif" font-size="3.6" fill="#4e3d28" text-anchor="middle" dominant-baseline="middle">Back</text>
+    <path d="M 15,65.5 L 65.5,65.5 L 65.5,166 L 15,166 Z" fill="#f7f1e8" fill-opacity="0.75" stroke="none" />
+    <text x="40.25" y="115.75" font-family="sans-serif" font-size="3.6" fill="#4e3d28" text-anchor="middle" dominant-baseline="middle">Left Side</text>
+    <path d="M 15,65.5 L 15,166 L 0,157 L 0,74.5 Z" fill="#f7f1e8" fill-opacity="0.75" stroke="none" />
+    <text x="7.5" y="115.75" font-family="sans-serif" font-size="3.6" fill="#4e3d28" text-anchor="middle" dominant-baseline="middle">Glue Tab</text>
+    <path d="M 16,65.5 L 16,63.5 L 24,33 L 56.5,33 L 64.5,63.5 L 64.5,65.5 Z" fill="#f7f1e8" fill-opacity="0.75" stroke="none" />
+    <text x="40.25" y="49.25" font-family="sans-serif" font-size="3.6" fill="#4e3d28" text-anchor="middle" dominant-baseline="middle">Top Left Dust Flap</text>
+    <path d="M 167,65.5 L 167,63.5 L 175,33 L 207.5,33 L 215.5,63.5 L 215.5,65.5 Z" fill="#f7f1e8" fill-opacity="0.75" stroke="none" />
+    <text x="191.25" y="49.25" font-family="sans-serif" font-size="3.6" fill="#4e3d28" text-anchor="middle" dominant-baseline="middle">Top Right Dust Flap</text>
+    <path d="M 216.5,65.5 L 216.5,15 L 218,15 L 218,7.5 Q 218,0 225.5,0 L 308,0 Q 315.5,0 315.5,7.5 L 315.5,15 L 317,15 L 317,65.5 Z" fill="#f7f1e8" fill-opacity="0.75" stroke="none" />
+    <text x="266.75" y="32.75" font-family="sans-serif" font-size="3.6" fill="#4e3d28" text-anchor="middle" dominant-baseline="middle">Top Tuck Flap</text>
+    <path d="M 64.5,166 L 64.5,168 L 56.5,198.5 L 24,198.5 L 16,168 L 16,166 Z" fill="#f7f1e8" fill-opacity="0.75" stroke="none" />
+    <text x="40.25" y="182.25" font-family="sans-serif" font-size="3.6" fill="#4e3d28" text-anchor="middle" dominant-baseline="middle">Bottom Left Dust Flap</text>
+    <path d="M 215.5,166 L 215.5,168 L 207.5,198.5 L 175,198.5 L 167,168 L 167,166 Z" fill="#f7f1e8" fill-opacity="0.75" stroke="none" />
+    <text x="191.25" y="182.25" font-family="sans-serif" font-size="3.6" fill="#4e3d28" text-anchor="middle" dominant-baseline="middle">Bottom Right Dust Flap</text>
+    <path d="M 166,166 L 166,216.5 L 164.5,216.5 L 164.5,224 Q 164.5,231.5 157,231.5 L 74.5,231.5 Q 67,231.5 67,224 L 67,216.5 L 65.5,216.5 L 65.5,166 Z" fill="#f7f1e8" fill-opacity="0.75" stroke="none" />
+    <text x="115.75" y="198.75" font-family="sans-serif" font-size="3.6" fill="#4e3d28" text-anchor="middle" dominant-baseline="middle">Bottom Tuck Flap</text>
+  </g>
+  <g id="bleeds">
+    <path d="M 213.5,44.06 L 213.5,12 L 215,12 L 215,7.5 Q 215,-3 225.5,-3 L 308,-3 Q 318.5,-3 318.5,7.5 L 318.5,12 L 320,12 L 320,169 L 218.4,169 L 218.4,168.76 L 210.4,199.26 L 207.5,201.5 L 175,201.5 L 172.1,199.26 L 169,187.44 L 169,219.5 L 167.5,219.5 L 167.5,224 Q 167.5,234.5 157,234.5 L 74.5,234.5 Q 64,234.5 64,224 L 64,219.5 L 62.5,219.5 L 62.5,187.44 L 59.4,199.26 L 56.5,201.5 L 24,201.5 L 21.1,199.26 L 12,168.57 L -1.54,159.57 L -3,159.57 L -3,71.93 L -1.54,71.93 L 13.1,62.74 L 21.1,32.24 L 24,30 L 56.5,30 L 59.4,32.24 L 67.4,62.74 L 67.4,62.5 L 164.1,62.5 L 164.1,62.74 L 172.1,32.24 L 175,30 L 207.5,30 L 210.4,32.24 Z" fill="none" stroke="#00838f" stroke-width="0.4" stroke-dasharray="2 1.5" />
+  </g>
+  <g id="folds">
+    <line x1="15" y1="65.5" x2="15" y2="166" stroke="#2e7d32" stroke-width="0.45" stroke-dasharray="3 1.5" />
+    <line x1="65.5" y1="65.5" x2="65.5" y2="166" stroke="#2e7d32" stroke-width="0.45" stroke-dasharray="3 1.5" />
+    <line x1="166" y1="65.5" x2="166" y2="166" stroke="#2e7d32" stroke-width="0.45" stroke-dasharray="3 1.5" />
+    <line x1="216.5" y1="65.5" x2="216.5" y2="166" stroke="#2e7d32" stroke-width="0.45" stroke-dasharray="3 1.5" />
+    <line x1="16" y1="65.5" x2="64.5" y2="65.5" stroke="#2e7d32" stroke-width="0.45" stroke-dasharray="3 1.5" />
+    <line x1="167" y1="65.5" x2="215.5" y2="65.5" stroke="#2e7d32" stroke-width="0.45" stroke-dasharray="3 1.5" />
+    <line x1="216.5" y1="65.5" x2="317" y2="65.5" stroke="#2e7d32" stroke-width="0.45" stroke-dasharray="3 1.5" />
+    <line x1="218" y1="15" x2="315.5" y2="15" stroke="#2e7d32" stroke-width="0.45" stroke-dasharray="3 1.5" />
+    <line x1="16" y1="166" x2="64.5" y2="166" stroke="#2e7d32" stroke-width="0.45" stroke-dasharray="3 1.5" />
+    <line x1="65.5" y1="166" x2="166" y2="166" stroke="#2e7d32" stroke-width="0.45" stroke-dasharray="3 1.5" />
+    <line x1="67" y1="216.5" x2="164.5" y2="216.5" stroke="#2e7d32" stroke-width="0.45" stroke-dasharray="3 1.5" />
+    <line x1="167" y1="166" x2="215.5" y2="166" stroke="#2e7d32" stroke-width="0.45" stroke-dasharray="3 1.5" />
+  </g>
+  <g id="cuts">
+    <path d="M 216.5,65.5 L 216.5,15 L 218,15 L 218,7.5 Q 218,0 225.5,0 L 308,0 Q 315.5,0 315.5,7.5 L 315.5,15 L 317,15 L 317,166 L 215.5,166 L 215.5,168 L 207.5,198.5 L 175,198.5 L 167,168 L 167,166 L 166,166 L 166,216.5 L 164.5,216.5 L 164.5,224 Q 164.5,231.5 157,231.5 L 74.5,231.5 Q 67,231.5 67,224 L 67,216.5 L 65.5,216.5 L 65.5,166 L 64.5,166 L 64.5,168 L 56.5,198.5 L 24,198.5 L 16,168 L 16,166 L 15,166 L 0,157 L 0,74.5 L 15,65.5 L 16,65.5 L 16,63.5 L 24,33 L 56.5,33 L 64.5,63.5 L 64.5,65.5 L 167,65.5 L 167,63.5 L 175,33 L 207.5,33 L 215.5,63.5 L 215.5,65.5 Z" fill="none" stroke="#c62828" stroke-width="0.6" />
+  </g>
+  <text x="317" y="242.5" font-family="sans-serif" font-size="3.4" fill="#5d4c39" text-anchor="end">Red = Cut | Green dashed = Fold (90 deg) | Teal dashed = Bleed (3 mm)</text>
+</svg>
