@@ -38,6 +38,7 @@ export interface BoxViewerProps {
   dimensions?: Dieline['dimensions'] | undefined;
   elements?: readonly DesignElement[] | undefined;
   foldAngle?: number | undefined;
+  onRegisterCapture?: ((captureFn: (() => string | null) | null) => void) | undefined;
 }
 
 interface FaceMaterialEntry {
@@ -149,6 +150,7 @@ interface CartonAssemblyProps {
   elements: readonly DesignElement[];
   foldAngle: number;
   edgeMaterial: THREE.LineBasicMaterial;
+  onRegisterCapture?: ((captureFn: (() => string | null) | null) => void) | undefined;
 }
 
 function CartonAssembly({
@@ -157,8 +159,12 @@ function CartonAssembly({
   elements,
   foldAngle,
   edgeMaterial,
+  onRegisterCapture,
 }: CartonAssemblyProps) {
   const invalidate = useThree((state) => state.invalidate);
+  const gl = useThree((state) => state.gl);
+  const scene = useThree((state) => state.scene);
+  const camera = useThree((state) => state.camera);
 
   const { faceMaterials, fallbackEntry } = useMemo(() => {
     const map = new Map<string, FaceMaterialEntry>();
@@ -170,6 +176,20 @@ function CartonAssembly({
       fallbackEntry: createFaceMaterialEntry(),
     };
   }, [dieline]);
+
+  useEffect(() => {
+    if (!onRegisterCapture) {
+      return undefined;
+    }
+    const capturePngDataUrl = (): string | null => {
+      gl.render(scene, camera);
+      return gl.domElement.toDataURL('image/png');
+    };
+    onRegisterCapture(capturePngDataUrl);
+    return () => {
+      onRegisterCapture(null);
+    };
+  }, [camera, gl, onRegisterCapture, scene]);
 
   // Dispose per-face textures and materials cleanly when dieline changes or viewer unmounts
   useEffect(() => {
@@ -209,13 +229,19 @@ function CartonAssembly({
       }
 
       entry.texture?.dispose();
-      const nextTexture =
-        nextSignature !== null ? bakeFaceTexture(face, faceElements, DEFAULT_BAKE_SCALE) : null;
-      entry.texture = nextTexture;
+      let createdTexture: THREE.CanvasTexture | null = null;
+      if (nextSignature !== null) {
+        createdTexture = bakeFaceTexture(face, faceElements, DEFAULT_BAKE_SCALE, () => {
+          if (entry.texture === createdTexture) {
+            invalidate();
+          }
+        });
+      }
+      entry.texture = createdTexture;
       entry.signature = nextSignature;
-      entry.outerMaterial.map = nextTexture;
+      entry.outerMaterial.map = createdTexture;
       entry.outerMaterial.needsUpdate = true;
-      entry.innerMaterial.map = nextTexture;
+      entry.innerMaterial.map = createdTexture;
       entry.innerMaterial.needsUpdate = true;
       dirty = true;
     }
@@ -247,6 +273,7 @@ export function BoxViewer({
   dimensions = DEFAULT_3D_DIMENSIONS,
   elements = EMPTY_ELEMENTS,
   foldAngle = 0,
+  onRegisterCapture,
 }: BoxViewerProps) {
   const dieline = useMemo(
     () => dielineProp ?? generateTuckEndBox(dimensions),
@@ -304,7 +331,7 @@ export function BoxViewer({
         frameloop="demand"
         dpr={[1, 1.5]}
         shadows={false}
-        gl={{ antialias: false, powerPreference: 'default' }}
+        gl={{ antialias: false, powerPreference: 'default', preserveDrawingBuffer: true }}
         camera={{ position: [2.6, 2.8, 4.1], fov: 40, near: 0.05, far: 100 }}
       >
         <color attach="background" args={['#f3ece3']} />
@@ -327,6 +354,7 @@ export function BoxViewer({
           elements={elements}
           foldAngle={foldAngle}
           edgeMaterial={edgeMaterial}
+          onRegisterCapture={onRegisterCapture}
         />
 
         <OrbitControls

@@ -1,5 +1,8 @@
-// Pure viewport coordinate, fit-to-screen, and zoom-at-anchor math for the 2D stage
+// Pure viewport coordinate, fit-to-screen, zoom, and face-clamped drag math for the 2D stage
+import type { DesignElement } from '@entities/design-document';
+import { roundMm, type SvgPathBoundsMm } from '@entities/dieline';
 import type { Point } from '@entities/dieline/types';
+import { pxToMm } from '@shared/lib/units';
 
 export const MIN_STAGE_ZOOM = 0.1;
 export const MAX_STAGE_ZOOM = 5;
@@ -76,5 +79,54 @@ export function zoomAtPoint(
       x: anchorPx.x - contentX * nextZoom,
       y: anchorPx.y - contentY * nextZoom,
     },
+  };
+}
+
+/** Converts a screen-space pixel delta into SVG millimeter delta under the current stage zoom. */
+export function screenDeltaPxToMm(deltaPx: number, zoom: number): number {
+  const safeZoom = zoom > 0 && Number.isFinite(zoom) ? zoom : 1;
+  return pxToMm(deltaPx) / safeZoom;
+}
+
+function clampRange(value: number, min: number, max: number): number {
+  if (max < min) {
+    return (min + max) * 0.5;
+  }
+  return Math.min(max, Math.max(min, value));
+}
+
+/** Clamps a dragged element's coordinates strictly within its parent face bounding box. */
+export function clampElementPositionToFace(
+  element: DesignElement,
+  candidateXMm: number,
+  candidateYMm: number,
+  faceBounds: SvgPathBoundsMm,
+): Point {
+  if (element.type === 'image') {
+    const maxX = Math.max(faceBounds.minX, faceBounds.maxX - element.transform.width);
+    const maxY = Math.max(faceBounds.minY, faceBounds.maxY - element.transform.height);
+    return {
+      x: roundMm(clampRange(candidateXMm, faceBounds.minX, maxX)),
+      y: roundMm(clampRange(candidateYMm, faceBounds.minY, maxY)),
+    };
+  }
+
+  if (element.type === 'text') {
+    const estimatedWidthMm = Math.max(
+      element.style.fontSize,
+      element.content.length * element.style.fontSize * 0.58,
+    );
+    const halfW = Math.min(faceBounds.width * 0.45, estimatedWidthMm * 0.5);
+    const halfH = Math.min(faceBounds.height * 0.45, element.style.fontSize * 0.72);
+
+    return {
+      x: roundMm(clampRange(candidateXMm, faceBounds.minX + halfW, faceBounds.maxX - halfW)),
+      y: roundMm(clampRange(candidateYMm, faceBounds.minY + halfH, faceBounds.maxY - halfH)),
+    };
+  }
+
+  return {
+    x: roundMm(clampRange(candidateXMm, faceBounds.minX, faceBounds.maxX)),
+    y: roundMm(clampRange(candidateYMm, faceBounds.minY, faceBounds.maxY)),
   };
 }

@@ -1,18 +1,26 @@
-// Offscreen 2D canvas texture baker for individual folded carton faces
+// Offscreen 2D canvas texture baker for individual folded carton faces (text & raster images)
 import * as THREE from 'three';
-import type { DesignElement, TextElement } from '@entities/design-document';
-import { computeSvgPathBoundsMm } from '@entities/dieline';
+import type { DesignElement, ImageElement, TextElement } from '@entities/design-document';
+import { computeSvgPathBoundsMm, type SvgPathBoundsMm } from '@entities/dieline';
 import type { Face } from '@entities/dieline/types';
+import { getCachedDecodedImage, setCachedDecodedImage } from '@shared/lib/imageUpload';
 import { PX_PER_MM } from '@shared/lib/units';
 
 export const MAX_TEXTURE_SIZE = 1024;
 export const DEFAULT_BAKE_SCALE = 2;
+
+export type BakeableArtworkElement = TextElement | ImageElement;
 
 export interface TexturePixelDimensions {
   width: number;
   height: number;
   pxPerMmX: number;
   pxPerMmY: number;
+}
+
+/** Registers an already-loaded HTMLImageElement for synchronous CanvasTexture baking. */
+export function registerBakedImage(src: string, image: HTMLImageElement): void {
+  setCachedDecodedImage(src, image);
 }
 
 /**
@@ -44,15 +52,17 @@ export function computeBakedTextureSize(
   };
 }
 
-/** Filters and z-orders outside-surface design elements belonging to a single face. */
+/** Filters and z-orders outside-surface text and image elements belonging to a single face. */
 export function getFaceElementsForFace(
   faceId: string,
   elements: readonly DesignElement[],
-): TextElement[] {
+): BakeableArtworkElement[] {
   return elements
     .filter(
-      (element): element is TextElement =>
-        element.type === 'text' && element.faceId === faceId && element.side === 'outside',
+      (element): element is BakeableArtworkElement =>
+        (element.type === 'text' || element.type === 'image') &&
+        element.faceId === faceId &&
+        element.side === 'outside',
     )
     .sort((a, b) => a.zIndex - b.zIndex);
 }
@@ -110,14 +120,109 @@ function drawTextElementOnFaceCanvas(
   ctx.restore();
 }
 
+function drawImageElementOnFaceCanvas(
+  ctx: CanvasRenderingContext2D,
+  element: ImageElement,
+  originXMm: number,
+  originYMm: number,
+  pxPerMmX: number,
+  pxPerMmY: number,
+  onImagePending: (image: HTMLImageElement, src: string) => void,
+): void {
+  if (!element.src) {
+    return;
+  }
+
+  let img = getCachedDecodedImage(element.src);
+  if (!img) {
+    img = new Image();
+    img.src = element.src;
+    if (img.complete && img.naturalWidth > 0) {
+      setCachedDecodedImage(element.src, img);
+    } else {
+      onImagePending(img, element.src);
+      return;
+    }
+  }
+
+  const boxX = (element.transform.x - originXMm) * pxPerMmX;
+  const boxY = (element.transform.y - originYMm) * pxPerMmY;
+  const boxW = Math.max(1, element.transform.width * pxPerMmX);
+  const boxH = Math.max(1, element.transform.height * pxPerMmY);
+
+  let drawX = boxX;
+  let drawY = boxY;
+  let drawW = boxW;
+  let drawH = boxH;
+
+  // Preserve natural aspect ratio cleanly inside target box unless explicitly stretched via fill
+  if (element.fit !== 'fill' && img.naturalWidth > 0 && img.naturalHeight > 0) {
+    const imgRatio = img.naturalWidth / img.naturalHeight;
+    const boxRatio = boxW / boxH;
+    if (imgRatio > boxRatio) {
+      drawH = boxW / imgRatio;
+      drawY = boxY + (boxH - drawH) * 0.5;
+    } else if (imgRatio < boxRatio) {
+      drawW = boxH * imgRatio;
+      drawX = boxX + (boxW - drawW) * 0.5;
+    }
+  }
+
+  ctx.save();
+  ctx.globalAlpha = element.opacity;
+
+  if (element.transform.rotation !== 0) {
+    const centerX = boxX + boxW * 0.5;
+    const centerY = boxY + boxH * 0.5;
+    ctx.translate(centerX, centerY);
+    ctx.rotate((element.transform.rotation * Math.PI) / 180);
+    ctx.drawImage(img, drawX - centerX, drawY - centerY, drawW, drawH);
+  } else {
+    ctx.drawImage(img, drawX, drawY, drawW, drawH);
+  }
+
+  ctx.restore();
+}
+
+function paintFaceArtwork(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  bounds: SvgPathBoundsMm,
+  pxPerMmX: number,
+  pxPerMmY: number,
+  matchingElements: readonly BakeableArtworkElement[],
+  onImagePending: (image: HTMLImageElement, src: string) => void,
+): void {
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, width, height);
+
+  for (const element of matchingElements) {
+    if (element.type === 'text') {
+      drawTextElementOnFaceCanvas(ctx, element, bounds.minX, bounds.minY, pxPerMmX, pxPerMmY);
+    } else if (element.type === 'image') {
+      drawImageElementOnFaceCanvas(
+        ctx,
+        element,
+        bounds.minX,
+        bounds.minY,
+        pxPerMmX,
+        pxPerMmY,
+        onImagePending,
+      );
+    }
+  }
+}
+
 /**
- * Bakes a single Face's paper background and assigned 2D artwork into an offscreen HTMLCanvas
- * wrapped in a lightweight THREE.CanvasTexture (mipmaps disabled, max edge <= 1024px).
+ * Bakes a single Face's paper background and assigned 2D artwork (text & images) into an
+ * offscreen HTMLCanvas wrapped in a lightweight THREE.CanvasTexture (max edge <= 1024px).
  */
 export function bakeFaceTexture(
   face: Face,
   elements: readonly DesignElement[],
   scale = DEFAULT_BAKE_SCALE,
+  onAsyncImageReady?: () => void,
 ): THREE.CanvasTexture {
   const bounds = computeSvgPathBoundsMm(face.path);
   const { width, height, pxPerMmX, pxPerMmY } = computeBakedTextureSize(
@@ -130,23 +235,56 @@ export function bakeFaceTexture(
   canvas.width = width;
   canvas.height = height;
 
-  const ctx = canvas.getContext('2d');
-  if (ctx) {
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, 0, width, height);
-
-    const matchingElements = getFaceElementsForFace(face.id, elements);
-    for (const element of matchingElements) {
-      drawTextElementOnFaceCanvas(ctx, element, bounds.minX, bounds.minY, pxPerMmX, pxPerMmY);
-    }
-  }
-
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
   texture.generateMipmaps = false;
   texture.minFilter = THREE.LinearFilter;
   texture.magFilter = THREE.LinearFilter;
-  texture.needsUpdate = true;
 
+  const ctx = canvas.getContext('2d');
+  if (ctx) {
+    const matchingElements = getFaceElementsForFace(face.id, elements);
+    const pendingImages = new Set<string>();
+
+    const handlePendingImage = (image: HTMLImageElement, src: string) => {
+      if (pendingImages.has(src)) {
+        return;
+      }
+      pendingImages.add(src);
+      image.addEventListener(
+        'load',
+        () => {
+          registerBakedImage(src, image);
+          // Re-render all elements on the face so zIndex stacking remains exact
+          paintFaceArtwork(
+            ctx,
+            width,
+            height,
+            bounds,
+            pxPerMmX,
+            pxPerMmY,
+            matchingElements,
+            () => undefined,
+          );
+          texture.needsUpdate = true;
+          onAsyncImageReady?.();
+        },
+        { once: true },
+      );
+    };
+
+    paintFaceArtwork(
+      ctx,
+      width,
+      height,
+      bounds,
+      pxPerMmX,
+      pxPerMmY,
+      matchingElements,
+      handlePendingImage,
+    );
+  }
+
+  texture.needsUpdate = true;
   return texture;
 }

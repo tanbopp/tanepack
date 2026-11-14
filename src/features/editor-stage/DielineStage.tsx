@@ -1,25 +1,33 @@
-// Interactive 2D SVG dieline viewport supporting mm coordinates, artwork layer, zoom, and pan
+// Interactive 2D SVG dieline viewport supporting mm coordinates, artwork drag, zoom, and pan
 import Box from '@mui/material/Box';
 import Divider from '@mui/material/Divider';
 import Typography from '@mui/material/Typography';
 import {
   type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
   useCallback,
   useEffect,
   useMemo,
   useRef,
   useState,
 } from 'react';
-import { generateTuckEndBox } from '@entities/dieline';
+import type { DesignElement } from '@entities/design-document';
+import {
+  computeSvgPathBoundsMm,
+  generateTuckEndBox,
+  type SvgPathBoundsMm,
+} from '@entities/dieline';
 import type { Dieline, Point } from '@entities/dieline/types';
 import { mmToPx } from '@shared/lib/units';
 import { M3Button, M3Icon, M3IconButton } from '@shared/ui';
 import { useEditorStore } from './store';
 import {
+  clampElementPositionToFace,
   clampZoom,
   computeFitViewport,
   MAX_STAGE_ZOOM,
   MIN_STAGE_ZOOM,
+  screenDeltaPxToMm,
   type StageViewport,
   zoomAtPoint,
 } from './viewport';
@@ -30,6 +38,18 @@ const SHEET_ELEVATION_SHADOW = 'drop-shadow(0 2px 6px rgba(0, 0, 0, 0.08))';
 
 export interface DielineStageProps {
   dimensions?: Dieline['dimensions'] | undefined;
+}
+
+interface ActiveElementDrag {
+  element: DesignElement;
+  pointerId: number | undefined;
+  startClientX: number;
+  startClientY: number;
+  startXMm: number;
+  startYMm: number;
+  zoomAtStart: number;
+  faceBounds: SvgPathBoundsMm;
+  hasMoved: boolean;
 }
 
 function isEditableTarget(target: EventTarget | null): boolean {
@@ -44,11 +64,14 @@ export function DielineStage({ dimensions }: DielineStageProps) {
   const stageRef = useRef<HTMLDivElement | null>(null);
   const hasAutoFittedRef = useRef(false);
   const dragOriginRef = useRef<{ clientX: number; clientY: number; pan: Point } | null>(null);
+  const activeElementDragRef = useRef<ActiveElementDrag | null>(null);
 
   const storeDieline = useEditorStore((state) => state.dieline);
   const elements = useEditorStore((state) => state.elements);
   const selectedElementId = useEditorStore((state) => state.selectedElementId);
   const selectElement = useEditorStore((state) => state.selectElement);
+  const updateElement = useEditorStore((state) => state.updateElement);
+  const commitElements = useEditorStore((state) => state.commitElements);
 
   const [viewport, setViewport] = useState<StageViewport>({
     zoom: 1,
@@ -56,16 +79,38 @@ export function DielineStage({ dimensions }: DielineStageProps) {
   });
   const [isSpacePressed, setIsSpacePressed] = useState(false);
   const [isPanning, setIsPanning] = useState(false);
+  const [draggingElementId, setDraggingElementId] = useState<string | null>(null);
 
   const dieline = useMemo(
     () => (dimensions ? generateTuckEndBox(dimensions) : storeDieline),
     [dimensions, storeDieline],
   );
 
-  const visibleTextElements = useMemo(
+  const faceBoundsMap = useMemo(() => {
+    const map = new Map<string, SvgPathBoundsMm>();
+    for (const face of dieline.faces) {
+      map.set(face.id, computeSvgPathBoundsMm(face.path));
+    }
+    return map;
+  }, [dieline.faces]);
+
+  const fallbackFaceBounds = useMemo<SvgPathBoundsMm>(
+    () => ({
+      minX: 0,
+      minY: 0,
+      maxX: dieline.totalWidth,
+      maxY: dieline.totalHeight,
+      width: dieline.totalWidth,
+      height: dieline.totalHeight,
+      center: { x: dieline.totalWidth * 0.5, y: dieline.totalHeight * 0.5 },
+    }),
+    [dieline.totalHeight, dieline.totalWidth],
+  );
+
+  const visibleArtworkElements = useMemo(
     () =>
       elements
-        .filter((el) => el.type === 'text' && el.side === 'outside')
+        .filter((el) => (el.type === 'text' || el.type === 'image') && el.side === 'outside')
         .sort((a, b) => a.zIndex - b.zIndex),
     [elements],
   );
@@ -228,7 +273,7 @@ export function DielineStage({ dimensions }: DielineStageProps) {
     };
   }, []);
 
-  // Cleanly handle drag updates on window so fast mouse moves stay locked until mouseup
+  // Track viewport pan drag on window until mouseup
   useEffect(() => {
     if (!isPanning) {
       return;
@@ -266,6 +311,109 @@ export function DielineStage({ dimensions }: DielineStageProps) {
     };
   }, [isPanning]);
 
+  // Track 2D artwork element Pointer Events drag in mm, committing only on pointerup
+  useEffect(() => {
+    if (!draggingElementId) {
+      return;
+    }
+
+    const computeDraggedPosition = (drag: ActiveElementDrag, clientX: number, clientY: number) => {
+      const dxMm = screenDeltaPxToMm(clientX - drag.startClientX, drag.zoomAtStart);
+      const dyMm = screenDeltaPxToMm(clientY - drag.startClientY, drag.zoomAtStart);
+      return clampElementPositionToFace(
+        drag.element,
+        drag.startXMm + dxMm,
+        drag.startYMm + dyMm,
+        drag.faceBounds,
+      );
+    };
+
+    const isMatchingPointer = (drag: ActiveElementDrag, pointerId: number | undefined): boolean =>
+      drag.pointerId === undefined || pointerId === undefined || drag.pointerId === pointerId;
+
+    const handlePointerMove = (event: PointerEvent) => {
+      const drag = activeElementDragRef.current;
+      if (!drag || !isMatchingPointer(drag, event.pointerId)) {
+        return;
+      }
+      if (
+        event.clientX === drag.startClientX &&
+        event.clientY === drag.startClientY &&
+        !drag.hasMoved
+      ) {
+        return;
+      }
+      drag.hasMoved = true;
+      const nextPos = computeDraggedPosition(drag, event.clientX, event.clientY);
+      updateElement(drag.element.id, { transform: { x: nextPos.x, y: nextPos.y } }, false);
+    };
+
+    const handlePointerFinish = (event: PointerEvent) => {
+      const drag = activeElementDragRef.current;
+      if (!drag || !isMatchingPointer(drag, event.pointerId)) {
+        return;
+      }
+      activeElementDragRef.current = null;
+      setDraggingElementId(null);
+
+      if (drag.hasMoved) {
+        const finalPos = computeDraggedPosition(drag, event.clientX, event.clientY);
+        updateElement(drag.element.id, { transform: { x: finalPos.x, y: finalPos.y } }, true);
+      }
+    };
+
+    const handleWindowBlur = () => {
+      const drag = activeElementDragRef.current;
+      if (!drag) {
+        return;
+      }
+      activeElementDragRef.current = null;
+      setDraggingElementId(null);
+      if (drag.hasMoved) {
+        commitElements();
+      }
+    };
+
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handlePointerFinish);
+    window.addEventListener('pointercancel', handlePointerFinish);
+    window.addEventListener('blur', handleWindowBlur);
+
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerFinish);
+      window.removeEventListener('pointercancel', handlePointerFinish);
+      window.removeEventListener('blur', handleWindowBlur);
+    };
+  }, [commitElements, draggingElementId, updateElement]);
+
+  const handleElementPointerDown = (
+    event: ReactPointerEvent<SVGGElement>,
+    element: DesignElement,
+  ) => {
+    if (isSpacePressed || (event.pointerType === 'mouse' && event.button !== 0)) {
+      return;
+    }
+
+    event.stopPropagation();
+    event.preventDefault();
+    selectElement(element.id);
+
+    const faceBounds = faceBoundsMap.get(element.faceId) ?? fallbackFaceBounds;
+    activeElementDragRef.current = {
+      element,
+      pointerId: event.pointerId,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      startXMm: element.transform.x,
+      startYMm: element.transform.y,
+      zoomAtStart: viewport.zoom,
+      faceBounds,
+      hasMoved: false,
+    };
+    setDraggingElementId(element.id);
+  };
+
   const handleStageMouseDown = (event: ReactMouseEvent<HTMLDivElement>) => {
     const isMiddleClick = event.button === 1;
     const isSpaceLeftClick = event.button === 0 && isSpacePressed;
@@ -295,7 +443,8 @@ export function DielineStage({ dimensions }: DielineStageProps) {
     setViewport((prev) => zoomAtPoint(prev, clampZoom(prev.zoom * multiplier), anchor));
   };
 
-  const cursorStyle = isPanning ? 'grabbing' : isSpacePressed ? 'grab' : 'default';
+  const cursorStyle =
+    isPanning || draggingElementId ? 'grabbing' : isSpacePressed ? 'grab' : 'default';
   const zoomPercent = Math.round(viewport.zoom * 100);
 
   return (
@@ -368,59 +517,112 @@ export function DielineStage({ dimensions }: DielineStageProps) {
             ))}
           </g>
 
-          {/* 2D Design artwork layer */}
+          {/* 2D Design artwork layer (texts & uploaded raster images sorted by zIndex) */}
           <g data-layer="artwork">
-            {visibleTextElements.map((el) => {
-              if (el.type !== 'text') {
-                return null;
-              }
+            {visibleArtworkElements.map((el) => {
               const isSelected = el.id === selectedElementId;
-              const boxWidth = Math.max(
-                el.transform.width,
-                el.content.length * el.style.fontSize * 0.62,
-              );
-              const boxHeight = el.style.fontSize * 1.45;
-              return (
-                <g
-                  key={el.id}
-                  data-testid={`stage-text-${el.id}`}
-                  onMouseDown={(event) => {
-                    if (event.button === 0 && !isSpacePressed) {
-                      event.stopPropagation();
-                      selectElement(el.id);
-                    }
-                  }}
-                  style={{ cursor: isSpacePressed ? 'grab' : 'pointer' }}
-                >
-                  {isSelected && (
-                    <rect
-                      x={el.transform.x - boxWidth * 0.5 - 3}
-                      y={el.transform.y - boxHeight * 0.5}
-                      width={boxWidth + 6}
-                      height={boxHeight}
-                      rx={1.5}
-                      fill="none"
-                      stroke="var(--md-sys-color-primary)"
-                      strokeWidth={0.45}
-                      strokeDasharray="1.5, 1"
-                    />
-                  )}
-                  <text
-                    x={el.transform.x}
-                    y={el.transform.y}
-                    fontFamily={el.style.fontFamily}
-                    fontSize={el.style.fontSize}
-                    fontWeight={el.style.fontWeight}
-                    fill={el.style.color}
-                    opacity={el.opacity}
-                    textAnchor="middle"
-                    dominantBaseline="central"
-                    style={{ userSelect: 'none' }}
+              const elementCursor = isSpacePressed
+                ? 'grab'
+                : draggingElementId === el.id
+                  ? 'grabbing'
+                  : 'move';
+
+              if (el.type === 'image') {
+                return (
+                  <g
+                    key={el.id}
+                    data-testid={`stage-image-${el.id}`}
+                    data-element-id={el.id}
+                    onPointerDown={(event) => handleElementPointerDown(event, el)}
+                    onMouseDown={(event) => {
+                      if (event.button === 0 && !isSpacePressed) {
+                        event.stopPropagation();
+                      }
+                    }}
+                    style={{ cursor: elementCursor }}
                   >
-                    {el.content}
-                  </text>
-                </g>
-              );
+                    <image
+                      href={el.src}
+                      x={el.transform.x}
+                      y={el.transform.y}
+                      width={el.transform.width}
+                      height={el.transform.height}
+                      preserveAspectRatio="xMidYMid meet"
+                      opacity={el.opacity}
+                      style={{ pointerEvents: 'all' }}
+                    />
+                    {isSelected && (
+                      <rect
+                        data-selection-box="true"
+                        x={el.transform.x - 1.5}
+                        y={el.transform.y - 1.5}
+                        width={el.transform.width + 3}
+                        height={el.transform.height + 3}
+                        rx={1.5}
+                        fill="none"
+                        stroke="var(--md-sys-color-primary)"
+                        strokeWidth={0.45}
+                        strokeDasharray="1.5, 1"
+                        style={{ pointerEvents: 'none' }}
+                      />
+                    )}
+                  </g>
+                );
+              }
+
+              if (el.type === 'text') {
+                const boxWidth = Math.max(
+                  el.transform.width,
+                  el.content.length * el.style.fontSize * 0.62,
+                );
+                const boxHeight = el.style.fontSize * 1.45;
+                return (
+                  <g
+                    key={el.id}
+                    data-testid={`stage-text-${el.id}`}
+                    data-element-id={el.id}
+                    onPointerDown={(event) => handleElementPointerDown(event, el)}
+                    onMouseDown={(event) => {
+                      if (event.button === 0 && !isSpacePressed) {
+                        event.stopPropagation();
+                      }
+                    }}
+                    style={{ cursor: elementCursor }}
+                  >
+                    {isSelected && (
+                      <rect
+                        data-selection-box="true"
+                        x={el.transform.x - boxWidth * 0.5 - 3}
+                        y={el.transform.y - boxHeight * 0.5}
+                        width={boxWidth + 6}
+                        height={boxHeight}
+                        rx={1.5}
+                        fill="none"
+                        stroke="var(--md-sys-color-primary)"
+                        strokeWidth={0.45}
+                        strokeDasharray="1.5, 1"
+                        style={{ pointerEvents: 'none' }}
+                      />
+                    )}
+                    <text
+                      x={el.transform.x}
+                      y={el.transform.y}
+                      fontFamily={el.style.fontFamily}
+                      fontSize={el.style.fontSize}
+                      fontWeight={el.style.fontWeight}
+                      fill={el.style.color}
+                      opacity={el.opacity}
+                      textAnchor="middle"
+                      dominantBaseline="central"
+                      style={{ userSelect: 'none' }}
+                    >
+                      {el.content}
+                    </text>
+                  </g>
+                );
+              }
+
+              return null;
             })}
           </g>
 

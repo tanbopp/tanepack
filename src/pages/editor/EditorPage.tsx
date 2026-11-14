@@ -1,13 +1,24 @@
-// Material Design 3 packaging editor combining Top App Bar, Left Rail, 2D/3D Stages, and Right Panel
+// Material Design 3 packaging editor combining Top App Bar, Left Rail, 2D/3D Stages, and Export
 import AppBar from '@mui/material/AppBar';
 import Box from '@mui/material/Box';
 import Divider from '@mui/material/Divider';
 import Slider from '@mui/material/Slider';
 import Toolbar from '@mui/material/Toolbar';
 import Typography from '@mui/material/Typography';
-import { type KeyboardEvent, lazy, Suspense, useEffect, useRef, useState } from 'react';
+import {
+  type ChangeEvent,
+  type KeyboardEvent,
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from 'react';
 import { useNavigate } from 'react-router-dom';
 import { DEFAULT_TEXT_CONTENT, DielineStage, useEditorStore } from '@features/editor-stage';
+import { exportSvgElementToPngDataUrl, triggerPngDataUrlDownload } from '@shared/lib/exportPng';
+import { loadUploadedImageFile } from '@shared/lib/imageUpload';
 import { M3Button, M3CircularProgress, M3Icon, M3IconButton, M3TextField } from '@shared/ui';
 
 type EditorRailToolId = 'templates' | 'text' | 'shapes' | 'upload';
@@ -36,7 +47,11 @@ export default function EditorPage() {
   const navigate = useNavigate();
   const [selectedTool, setSelectedTool] = useState<EditorRailToolId | null>(null);
   const [viewMode, setViewMode] = useState<EditorViewMode>('2d');
+  const [isExporting, setIsExporting] = useState(false);
+
   const commitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const capture3dPngRef = useRef<(() => string | null) | null>(null);
 
   const dieline = useEditorStore((state) => state.dieline);
   const elements = useEditorStore((state) => state.elements);
@@ -44,6 +59,7 @@ export default function EditorPage() {
   const selectedElementId = useEditorStore((state) => state.selectedElementId);
   const foldAngle = useEditorStore((state) => state.foldAngle);
   const addElement = useEditorStore((state) => state.addElement);
+  const addImageElement = useEditorStore((state) => state.addImageElement);
   const updateElement = useEditorStore((state) => state.updateElement);
   const removeElement = useEditorStore((state) => state.removeElement);
   const commitElements = useEditorStore((state) => state.commitElements);
@@ -70,6 +86,10 @@ export default function EditorPage() {
     };
   }, []);
 
+  const handleRegister3dCapture = useCallback((captureFn: (() => string | null) | null) => {
+    capture3dPngRef.current = captureFn;
+  }, []);
+
   const handleRailItemClick = (toolId: EditorRailToolId) => {
     if (toolId === 'text') {
       clearCommitTimer();
@@ -77,7 +97,35 @@ export default function EditorPage() {
       addElement({ faceId: 'front', content: DEFAULT_TEXT_CONTENT });
       return;
     }
+    if (toolId === 'upload') {
+      clearCommitTimer();
+      setSelectedTool('upload');
+      fileInputRef.current?.click();
+      return;
+    }
     setSelectedTool((prev) => (prev === toolId ? null : toolId));
+  };
+
+  const handleImageFileChange = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) {
+      return;
+    }
+
+    try {
+      const loaded = await loadUploadedImageFile(file);
+      addImageElement({
+        src: loaded.src,
+        naturalWidth: loaded.naturalWidth,
+        naturalHeight: loaded.naturalHeight,
+        width: loaded.widthMm,
+        height: loaded.heightMm,
+        faceId: 'front',
+      });
+    } catch (err) {
+      console.error('Failed to load uploaded image:', err);
+    }
   };
 
   const handleSwitchViewMode = (mode: EditorViewMode) => {
@@ -119,6 +167,32 @@ export default function EditorPage() {
     removeElement(selectedElement.id);
   };
 
+  const handleExport = async () => {
+    if (isExporting) {
+      return;
+    }
+    setIsExporting(true);
+    try {
+      if (viewMode === '3d') {
+        const dataUrl = capture3dPngRef.current?.() ?? null;
+        if (dataUrl) {
+          triggerPngDataUrlDownload(dataUrl, 'untitled-box-3d.png');
+        }
+        return;
+      }
+
+      const svgElement = document.querySelector('[data-testid="dieline-svg"]');
+      if (svgElement instanceof SVGSVGElement) {
+        const dataUrl = await exportSvgElementToPngDataUrl(svgElement);
+        triggerPngDataUrlDownload(dataUrl, 'untitled-box-2d.png');
+      }
+    } catch (err) {
+      console.error('Failed to export PNG snapshot:', err);
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
   return (
     <Box
       sx={{
@@ -131,6 +205,19 @@ export default function EditorPage() {
         color: 'var(--md-sys-color-on-surface)',
       }}
     >
+      {/* Hidden image upload picker */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/png, image/jpeg"
+        hidden
+        data-testid="image-upload-input"
+        aria-label="Upload image file"
+        onChange={(event) => {
+          void handleImageFileChange(event);
+        }}
+      />
+
       {/* Top App Bar */}
       <AppBar
         position="static"
@@ -232,8 +319,11 @@ export default function EditorPage() {
             <M3Button
               m3Variant="filled"
               size="small"
-              disabled
+              disabled={isExporting}
               startIcon={<M3Icon name="download" size={18} />}
+              onClick={() => {
+                void handleExport();
+              }}
             >
               Export
             </M3Button>
@@ -262,7 +352,11 @@ export default function EditorPage() {
           {LEFT_RAIL_ITEMS.map((item) => {
             const isActive = selectedTool === item.id;
             const tooltip =
-              item.id === 'text' ? 'Add text onto Front face' : `${item.label} (coming soon)`;
+              item.id === 'text'
+                ? 'Add text onto Front face'
+                : item.id === 'upload'
+                  ? 'Upload PNG or JPEG image'
+                  : `${item.label} (coming soon)`;
             return (
               <Box
                 key={item.id}
@@ -336,7 +430,12 @@ export default function EditorPage() {
                 </Box>
               }
             >
-              <LazyBoxViewer dieline={dieline} elements={committedElements} foldAngle={foldAngle} />
+              <LazyBoxViewer
+                dieline={dieline}
+                elements={committedElements}
+                foldAngle={foldAngle}
+                onRegisterCapture={handleRegister3dCapture}
+              />
             </Suspense>
           )}
         </Box>
@@ -460,8 +559,8 @@ export default function EditorPage() {
                 </Box>
                 <M3IconButton
                   icon="delete"
-                  label="Delete selected text"
-                  tooltip="Remove text element"
+                  label="Delete selected element"
+                  tooltip="Remove element"
                   size="small"
                   onClick={handleDeleteSelected}
                   sx={{ color: 'var(--md-sys-color-error)' }}
@@ -478,8 +577,94 @@ export default function EditorPage() {
               />
 
               <Typography variant="bodySmall" color="text.secondary">
-                Live edits update the 2D sheet immediately and bake onto the {selectedFaceName} face
-                in 3D when committed.
+                Drag or edit to update the 2D sheet live; changes bake onto the {selectedFaceName}{' '}
+                face in 3D once committed.
+              </Typography>
+            </Box>
+          ) : selectedElement && selectedElement.type === 'image' ? (
+            <Box
+              data-testid="image-properties-panel"
+              sx={{
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 2,
+              }}
+            >
+              <Box
+                sx={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 1,
+                }}
+              >
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}>
+                  <Typography variant="titleSmall" component="h2" color="text.primary">
+                    Image Artwork
+                  </Typography>
+                  {selectedFaceName && (
+                    <Typography
+                      variant="labelSmall"
+                      component="span"
+                      sx={{
+                        px: 1,
+                        py: 0.25,
+                        borderRadius: '9999px',
+                        backgroundColor: 'var(--md-sys-color-surface-container-high)',
+                        color: 'var(--md-sys-color-on-surface-variant)',
+                      }}
+                    >
+                      {selectedFaceName}
+                    </Typography>
+                  )}
+                </Box>
+                <M3IconButton
+                  icon="delete"
+                  label="Delete selected element"
+                  tooltip="Remove element"
+                  size="small"
+                  onClick={handleDeleteSelected}
+                  sx={{ color: 'var(--md-sys-color-error)' }}
+                />
+              </Box>
+
+              <Box
+                sx={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 1.5,
+                  p: 1.25,
+                  borderRadius: '12px',
+                  backgroundColor: 'var(--md-sys-color-surface-container)',
+                  border: '1px solid var(--md-sys-color-outline-variant)',
+                }}
+              >
+                <Box
+                  component="img"
+                  src={selectedElement.src}
+                  alt="Uploaded artwork preview"
+                  sx={{
+                    width: 48,
+                    height: 48,
+                    objectFit: 'contain',
+                    borderRadius: '8px',
+                    backgroundColor: '#ffffff',
+                    flexShrink: 0,
+                  }}
+                />
+                <Box sx={{ minWidth: 0 }}>
+                  <Typography variant="labelMedium" component="div" color="text.primary">
+                    {selectedElement.transform.width} × {selectedElement.transform.height} mm
+                  </Typography>
+                  <Typography variant="bodySmall" color="text.secondary">
+                    {selectedElement.naturalWidth} × {selectedElement.naturalHeight} px
+                  </Typography>
+                </Box>
+              </Box>
+
+              <Typography variant="bodySmall" color="text.secondary">
+                Drag on the 2D sheet to position within the {selectedFaceName} face; committed edits
+                bake directly onto the 3D carton.
               </Typography>
             </Box>
           ) : (
@@ -494,8 +679,8 @@ export default function EditorPage() {
               }}
             >
               <Typography variant="bodyMedium" color="text.secondary">
-                Click &ldquo;Add Text&rdquo; in the left rail or select an element on the dieline to
-                edit artwork properties.
+                Click &ldquo;Add Text&rdquo; or &ldquo;Upload&rdquo; in the left rail, or select an
+                element on the dieline to edit artwork.
               </Typography>
             </Box>
           )}

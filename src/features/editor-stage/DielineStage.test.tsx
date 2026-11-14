@@ -1,17 +1,26 @@
-// Unit tests for 2D DielineStage SVG rendering, mm-to-px scaling, and pan/zoom controls
+// Unit tests for 2D DielineStage SVG rendering, mm-to-px scaling, pan/zoom, and pointer element drag
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { computeSvgPathBoundsMm } from '@entities/dieline';
 import { PX_PER_MM } from '@shared/lib/units';
 import {
+  clampElementPositionToFace,
   clampZoom,
   computeFitViewport,
   DielineStage,
   MAX_STAGE_ZOOM,
   MIN_STAGE_ZOOM,
+  screenDeltaPxToMm,
+  useEditorStore,
   zoomAtPoint,
 } from './index';
 
+beforeEach(() => {
+  useEditorStore.getState().reset();
+});
+
 afterEach(() => {
+  useEditorStore.getState().reset();
   cleanup();
 });
 
@@ -127,5 +136,109 @@ describe('DielineStage component', () => {
     expect(transformBox.style.transform).toBe('translate(100px, 10px) scale(1)');
 
     expect(screen.getByRole('button', { name: /Fit to Screen/i })).toBeTruthy();
+  });
+
+  it('converts pointer drag delta using PX_PER_MM and zoom, clamping strictly inside parent face bounds', () => {
+    expect(screenDeltaPxToMm(PX_PER_MM * 10, 1)).toBeCloseTo(10, 5);
+    expect(screenDeltaPxToMm(PX_PER_MM * 10, 2)).toBeCloseTo(5, 5);
+
+    const addedText = useEditorStore.getState().addElement();
+    const frontFace = useEditorStore.getState().dieline.faces.find((f) => f.id === 'front')!;
+    const frontBounds = computeSvgPathBoundsMm(frontFace.path);
+
+    const clamped = clampElementPositionToFace(
+      addedText,
+      frontBounds.maxX + 200,
+      frontBounds.minY - 200,
+      frontBounds,
+    );
+    expect(clamped.x).toBeLessThanOrEqual(frontBounds.maxX);
+    expect(clamped.x).toBeGreaterThan(frontBounds.center.x);
+    expect(clamped.y).toBeGreaterThanOrEqual(frontBounds.minY);
+    expect(clamped.y).toBeLessThan(frontBounds.center.y);
+
+    const addedImg = useEditorStore.getState().addImageElement({
+      src: 'data:image/png;base64,iVBORw0KGgo=',
+      naturalWidth: 100,
+      naturalHeight: 100,
+    });
+    const clampedImg = clampElementPositionToFace(
+      addedImg,
+      frontBounds.maxX + 50,
+      frontBounds.minY - 50,
+      frontBounds,
+    );
+    expect(clampedImg.x).toBeCloseTo(frontBounds.maxX - 30, 2);
+    expect(clampedImg.y).toBeCloseTo(frontBounds.minY, 2);
+  });
+
+  it('drags text and image elements with pointer events, committing only on pointerup', () => {
+    const addedText = useEditorStore.getState().addElement();
+    const addedImg = useEditorStore.getState().addImageElement({
+      src: 'data:image/png;base64,iVBORw0KGgo=',
+      naturalWidth: 200,
+      naturalHeight: 100,
+    });
+
+    const initialTextX = addedText.transform.x;
+    const initialTextY = addedText.transform.y;
+    const initialImgX = addedImg.transform.x;
+    const initialImgY = addedImg.transform.y;
+
+    render(<DielineStage />);
+
+    // Drag text element by +10mm in X and -12mm in Y (at zoom=1)
+    const textGroup = screen.getByTestId(`stage-text-${addedText.id}`);
+    fireEvent.pointerDown(textGroup, { pointerId: 1, button: 0, clientX: 200, clientY: 200 });
+    fireEvent.pointerMove(window, {
+      pointerId: 1,
+      clientX: 200 + 10 * PX_PER_MM,
+      clientY: 200 - 12 * PX_PER_MM,
+    });
+
+    // Live elements moved, committedElements untouched until pointerUp
+    const liveText = useEditorStore.getState().elements.find((e) => e.id === addedText.id)!;
+    const committedDuringDrag = useEditorStore
+      .getState()
+      .committedElements.find((e) => e.id === addedText.id)!;
+    expect(liveText.transform.x).toBeCloseTo(initialTextX + 10, 1);
+    expect(liveText.transform.y).toBeCloseTo(initialTextY - 12, 1);
+    expect(committedDuringDrag.transform.x).toBeCloseTo(initialTextX, 2);
+
+    fireEvent.pointerUp(window, {
+      pointerId: 1,
+      clientX: 200 + 10 * PX_PER_MM,
+      clientY: 200 - 12 * PX_PER_MM,
+    });
+    const committedAfterDrag = useEditorStore
+      .getState()
+      .committedElements.find((e) => e.id === addedText.id)!;
+    expect(committedAfterDrag.transform.x).toBeCloseTo(initialTextX + 10, 1);
+    expect(committedAfterDrag.transform.y).toBeCloseTo(initialTextY - 12, 1);
+
+    // Drag image element by -8mm in X and +14mm in Y
+    const imgGroup = screen.getByTestId(`stage-image-${addedImg.id}`);
+    const renderedImg = imgGroup.querySelector('image');
+    expect(renderedImg).not.toBeNull();
+    expect(renderedImg?.getAttribute('href')).toBe('data:image/png;base64,iVBORw0KGgo=');
+
+    fireEvent.pointerDown(imgGroup, { pointerId: 2, button: 0, clientX: 300, clientY: 300 });
+    fireEvent.pointerMove(window, {
+      pointerId: 2,
+      clientX: 300 - 8 * PX_PER_MM,
+      clientY: 300 + 14 * PX_PER_MM,
+    });
+    expect(
+      useEditorStore.getState().committedElements.find((e) => e.id === addedImg.id)!.transform.x,
+    ).toBeCloseTo(initialImgX, 2);
+
+    fireEvent.pointerUp(window, {
+      pointerId: 2,
+      clientX: 300 - 8 * PX_PER_MM,
+      clientY: 300 + 14 * PX_PER_MM,
+    });
+    const movedImg = useEditorStore.getState().committedElements.find((e) => e.id === addedImg.id)!;
+    expect(movedImg.transform.x).toBeCloseTo(initialImgX - 8, 1);
+    expect(movedImg.transform.y).toBeCloseTo(initialImgY + 14, 1);
   });
 });

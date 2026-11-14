@@ -1,7 +1,12 @@
 // Zustand store holding 2D design elements, selection, dieline model, and 3D fold state
 import { create } from 'zustand';
-import type { DesignElement, TextElement } from '@entities/design-document';
-import { computeSvgPathBoundsMm, type Dieline, generateTuckEndBox } from '@entities/dieline';
+import type { DesignElement, ImageElement, TextElement } from '@entities/design-document';
+import {
+  computeSvgPathBoundsMm,
+  type Dieline,
+  generateTuckEndBox,
+  roundMm,
+} from '@entities/dieline';
 import { createEntityId } from '@shared/lib/id';
 
 export const DEFAULT_DIELINE_DIMENSIONS: Dieline['dimensions'] = {
@@ -13,6 +18,7 @@ export const DEFAULT_DIELINE_DIMENSIONS: Dieline['dimensions'] = {
 };
 
 export const DEFAULT_TEXT_CONTENT = 'Tanepack';
+export const DEFAULT_IMAGE_SIZE_MM = 30;
 
 export interface AddTextElementOptions {
   faceId?: string | undefined;
@@ -21,12 +27,25 @@ export interface AddTextElementOptions {
   y?: number | undefined;
 }
 
-export interface TextElementPatch {
+export interface AddImageElementOptions {
+  src: string;
+  faceId?: string | undefined;
+  naturalWidth?: number | undefined;
+  naturalHeight?: number | undefined;
+  width?: number | undefined;
+  height?: number | undefined;
+  x?: number | undefined;
+  y?: number | undefined;
+}
+
+export interface ElementPatch {
   content?: string | undefined;
   opacity?: number | undefined;
-  transform?: Partial<TextElement['transform']> | undefined;
+  transform?: Partial<DesignElement['transform']> | undefined;
   style?: Partial<TextElement['style']> | undefined;
 }
+
+export type TextElementPatch = ElementPatch;
 
 export interface EditorStageStoreState {
   dieline: Dieline;
@@ -35,7 +54,8 @@ export interface EditorStageStoreState {
   selectedElementId: string | null;
   foldAngle: number;
   addElement: (options?: AddTextElementOptions) => TextElement;
-  updateElement: (id: string, patch: TextElementPatch, commit?: boolean) => void;
+  addImageElement: (options: AddImageElementOptions) => ImageElement;
+  updateElement: (id: string, patch: ElementPatch, commit?: boolean) => void;
   removeElement: (id: string) => void;
   selectElement: (id: string | null) => void;
   commitElements: () => void;
@@ -48,17 +68,43 @@ function createInitialDieline(): Dieline {
   return generateTuckEndBox(DEFAULT_DIELINE_DIMENSIONS);
 }
 
-function patchTextElement(element: DesignElement, patch: TextElementPatch): DesignElement {
-  if (element.type !== 'text') {
-    return element;
+function resolveFaceBounds(dieline: Dieline, targetFaceId: string) {
+  const face = dieline.faces.find((candidate) => candidate.id === targetFaceId) ?? dieline.faces[0];
+  const resolvedFaceId = face?.id ?? targetFaceId;
+  const bounds = face
+    ? computeSvgPathBoundsMm(face.path)
+    : {
+        minX: 0,
+        minY: 0,
+        maxX: dieline.totalWidth,
+        maxY: dieline.totalHeight,
+        width: 80,
+        height: 20,
+        center: { x: dieline.totalWidth * 0.5, y: dieline.totalHeight * 0.5 },
+      };
+  return { resolvedFaceId, bounds };
+}
+
+function patchElement(element: DesignElement, patch: ElementPatch): DesignElement {
+  const nextTransform = patch.transform
+    ? { ...element.transform, ...patch.transform }
+    : element.transform;
+  const nextOpacity = patch.opacity ?? element.opacity;
+
+  if (element.type === 'text') {
+    return {
+      ...element,
+      ...(patch.content !== undefined ? { content: patch.content } : {}),
+      opacity: nextOpacity,
+      transform: nextTransform,
+      style: patch.style ? { ...element.style, ...patch.style } : element.style,
+    };
   }
 
   return {
     ...element,
-    ...(patch.content !== undefined ? { content: patch.content } : {}),
-    ...(patch.opacity !== undefined ? { opacity: patch.opacity } : {}),
-    transform: patch.transform ? { ...element.transform, ...patch.transform } : element.transform,
-    style: patch.style ? { ...element.style, ...patch.style } : element.style,
+    opacity: nextOpacity,
+    transform: nextTransform,
   };
 }
 
@@ -73,20 +119,10 @@ export const useEditorStore = create<EditorStageStoreState>((set) => ({
     let created: TextElement | null = null;
 
     set((state) => {
-      const targetFaceId = options?.faceId ?? 'front';
-      const face =
-        state.dieline.faces.find((candidate) => candidate.id === targetFaceId) ??
-        state.dieline.faces[0];
-
-      const bounds = face
-        ? computeSvgPathBoundsMm(face.path)
-        : {
-            center: { x: state.dieline.totalWidth * 0.5, y: state.dieline.totalHeight * 0.5 },
-            width: 80,
-            height: 20,
-          };
-
-      const resolvedFaceId = face?.id ?? targetFaceId;
+      const { resolvedFaceId, bounds } = resolveFaceBounds(
+        state.dieline,
+        options?.faceId ?? 'front',
+      );
       const existingCount = state.elements.filter((el) => el.faceId === resolvedFaceId).length;
       const staggerOffsets = [0, -18, 18, -32, 32];
       const offsetIndex = existingCount % staggerOffsets.length;
@@ -133,10 +169,61 @@ export const useEditorStore = create<EditorStageStoreState>((set) => ({
     return created;
   },
 
+  addImageElement: (options) => {
+    let created: ImageElement | null = null;
+
+    set((state) => {
+      const { resolvedFaceId, bounds } = resolveFaceBounds(
+        state.dieline,
+        options.faceId ?? 'front',
+      );
+      const naturalWidth =
+        options.naturalWidth && options.naturalWidth > 0 ? options.naturalWidth : 1;
+      const naturalHeight =
+        options.naturalHeight && options.naturalHeight > 0 ? options.naturalHeight : 1;
+      const fitScale = DEFAULT_IMAGE_SIZE_MM / Math.max(naturalWidth, naturalHeight);
+      const width = options.width ?? roundMm(naturalWidth * fitScale);
+      const height = options.height ?? roundMm(naturalHeight * fitScale);
+
+      const imageElement: ImageElement = {
+        id: createEntityId(10),
+        type: 'image',
+        faceId: resolvedFaceId,
+        side: 'outside',
+        src: options.src,
+        naturalWidth: options.naturalWidth ?? DEFAULT_IMAGE_SIZE_MM,
+        naturalHeight: options.naturalHeight ?? DEFAULT_IMAGE_SIZE_MM,
+        fit: 'contain',
+        transform: {
+          x: options.x ?? roundMm(bounds.center.x - width * 0.5),
+          y: options.y ?? roundMm(bounds.center.y - height * 0.5),
+          width,
+          height,
+          rotation: 0,
+        },
+        opacity: 1,
+        zIndex: state.elements.length + 1,
+      };
+
+      created = imageElement;
+      const nextElements = [...state.elements, imageElement];
+      return {
+        elements: nextElements,
+        committedElements: nextElements,
+        selectedElementId: imageElement.id,
+      };
+    });
+
+    if (!created) {
+      throw new Error('Failed to create image element.');
+    }
+    return created;
+  },
+
   updateElement: (id, patch, commit = false) =>
     set((state) => {
       const nextElements = state.elements.map((el) =>
-        el.id === id ? patchTextElement(el, patch) : el,
+        el.id === id ? patchElement(el, patch) : el,
       );
       return {
         elements: nextElements,

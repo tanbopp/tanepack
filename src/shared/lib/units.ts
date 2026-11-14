@@ -25,3 +25,9 @@ export function mmToUnit(mm: number, unit: PhysicalUnit): number {
 export function unitToMm(value: number, unit: PhysicalUnit): number {
   return value * UNIT_IN_MM[unit];
 }
+
+/** Rounds a millimeter value to 2 decimal places max while avoiding -0. */
+export function roundMm(value: number): number {
+  const rounded = Math.round((value + Number.EPSILON) * 100) / 100;
+  return Object.is(rounded, -0) ? 0 : rounded;
+}

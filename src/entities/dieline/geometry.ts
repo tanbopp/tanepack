@@ -1,11 +1,8 @@
 // Pure millimeter geometry, SVG path formatting, and offset helpers for dielines
 import type { Point } from '@entities/dieline/types';
+import { roundMm } from '@shared/lib/units';
 
-/** Rounds a coordinate or dimension in millimeters to 2 decimal places max. */
-export function roundMm(value: number): number {
-  const rounded = Math.round((value + Number.EPSILON) * 100) / 100;
-  return Object.is(rounded, -0) ? 0 : rounded;
-}
+export { roundMm };
 
 /** Formats a millimeter number to at most 2 decimal places without trailing zeros. */
 export function fmtMm(value: number): string {

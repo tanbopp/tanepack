@@ -1,7 +1,7 @@
-// Unit tests for Zustand editor stage store elements, commits, fold angle, and reset
+// Zustand store holding 2D design elements, selection, commits, image uploads, and reset tests
 import { beforeEach, describe, expect, it } from 'vitest';
 import { computeSvgPathBoundsMm } from '@entities/dieline';
-import { DEFAULT_TEXT_CONTENT, useEditorStore } from './store';
+import { DEFAULT_IMAGE_SIZE_MM, DEFAULT_TEXT_CONTENT, useEditorStore } from './store';
 
 describe('useEditorStore', () => {
   beforeEach(() => {
@@ -35,6 +35,39 @@ describe('useEditorStore', () => {
     expect(after.elements).toHaveLength(1);
     expect(after.committedElements).toHaveLength(1);
     expect(after.selectedElementId).toBe(added.id);
+  });
+
+  it('adds centered ImageElement on front face preserving aspect ratio within 30x30 mm', () => {
+    const added = useEditorStore.getState().addImageElement({
+      src: 'data:image/png;base64,iVBORw0KGgo=',
+      naturalWidth: 200,
+      naturalHeight: 100,
+    });
+    const after = useEditorStore.getState();
+    const front = after.dieline.faces.find((f) => f.id === 'front')!;
+    const frontBounds = computeSvgPathBoundsMm(front.path);
+
+    expect(added.type).toBe('image');
+    expect(added.faceId).toBe('front');
+    expect(added.transform.width).toBe(DEFAULT_IMAGE_SIZE_MM);
+    expect(added.transform.height).toBe(15);
+    expect(added.transform.x).toBeCloseTo(frontBounds.center.x - 15, 2);
+    expect(added.transform.y).toBeCloseTo(frontBounds.center.y - 7.5, 2);
+    expect(after.selectedElementId).toBe(added.id);
+    expect(after.committedElements).toHaveLength(1);
+
+    // Updating image transform live (drag) leaves committedElements intact until commit
+    useEditorStore.getState().updateElement(added.id, { transform: { x: 90, y: 80 } }, false);
+    const moved = useEditorStore.getState().elements[0]!;
+    expect(moved.transform.x).toBe(90);
+    expect(moved.transform.y).toBe(80);
+    expect(useEditorStore.getState().committedElements[0]!.transform.x).toBeCloseTo(
+      frontBounds.center.x - 15,
+      2,
+    );
+
+    useEditorStore.getState().commitElements();
+    expect(useEditorStore.getState().committedElements[0]!.transform.x).toBe(90);
   });
 
   it('supports live typing updates separately from committedElements until commitElements()', () => {

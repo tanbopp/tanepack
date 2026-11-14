@@ -1,7 +1,7 @@
-// Unit tests for per-face 2D canvas texture baking, sizing clamp, and local coordinate mapping
+// Unit tests for per-face 2D canvas texture baking, sizing clamp, text, and raster images
 import * as THREE from 'three';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { DesignElement, TextElement } from '@entities/design-document';
+import type { DesignElement, ImageElement, TextElement } from '@entities/design-document';
 import { computeSvgPathBoundsMm, generateTuckEndBox } from '@entities/dieline';
 import {
   bakeFaceTexture,
@@ -9,6 +9,7 @@ import {
   computeBakedTextureSize,
   getFaceElementsForFace,
   MAX_TEXTURE_SIZE,
+  registerBakedImage,
 } from './bakeTexture';
 
 function makeSampleText(overrides: Partial<TextElement> = {}): TextElement {
@@ -40,6 +41,29 @@ function makeSampleText(overrides: Partial<TextElement> = {}): TextElement {
   };
 }
 
+function makeSampleImage(overrides: Partial<ImageElement> = {}): ImageElement {
+  return {
+    id: 'img-1',
+    type: 'image',
+    faceId: 'front',
+    side: 'outside',
+    src: 'data:image/png;base64,iVBORw0KGgo=',
+    naturalWidth: 200,
+    naturalHeight: 100,
+    fit: 'contain',
+    transform: {
+      x: 100.75,
+      y: 108.25,
+      width: 30,
+      height: 15,
+      rotation: 0,
+    },
+    opacity: 1,
+    zIndex: 2,
+    ...overrides,
+  };
+}
+
 describe('bakeTexture', () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -57,7 +81,7 @@ describe('bakeTexture', () => {
     expect(oversized.height).toBeLessThanOrEqual(MAX_TEXTURE_SIZE);
   });
 
-  it('filters outside-facing text elements by faceId and orders by zIndex', () => {
+  it('filters outside-facing text and image elements by faceId and orders by zIndex', () => {
     const dieline = generateTuckEndBox({
       length: 100,
       width: 50,
@@ -70,14 +94,15 @@ describe('bakeTexture', () => {
       makeSampleText({ id: 'a', faceId: 'back', content: 'Back' }),
       makeSampleText({ id: 'b', faceId: 'front', zIndex: 5, content: 'Second' }),
       makeSampleText({ id: 'c', faceId: 'front', side: 'inside', zIndex: 1, content: 'Inside' }),
+      makeSampleImage({ id: 'img', faceId: 'front', zIndex: 3 }),
       makeSampleText({ id: 'd', faceId: 'front', zIndex: 2, content: 'First' }),
     ];
 
     const filtered = getFaceElementsForFace(front.id, elements);
-    expect(filtered.map((e) => e.id)).toEqual(['d', 'b']);
+    expect(filtered.map((e) => e.id)).toEqual(['d', 'img', 'b']);
   });
 
-  it('paints white background and draws matching text in face-local pixel coordinates', () => {
+  it('paints white background, text, and pre-registered raster images using local pixel coordinates', () => {
     const dieline = generateTuckEndBox({
       length: 100,
       width: 50,
@@ -90,6 +115,7 @@ describe('bakeTexture', () => {
 
     const fillRect = vi.fn();
     const fillText = vi.fn();
+    const drawImage = vi.fn();
     const save = vi.fn();
     const restore = vi.fn();
     const mockCtx = {
@@ -100,6 +126,7 @@ describe('bakeTexture', () => {
       globalAlpha: 1,
       fillRect,
       fillText,
+      drawImage,
       save,
       restore,
       translate: vi.fn(),
@@ -108,8 +135,17 @@ describe('bakeTexture', () => {
 
     vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(mockCtx);
 
+    const imgSrc = 'data:image/png;base64,TESTLOGO200X100';
+    const fakeImg = {
+      complete: true,
+      naturalWidth: 200,
+      naturalHeight: 100,
+    } as unknown as HTMLImageElement;
+    registerBakedImage(imgSrc, fakeImg);
+
     const centeredText = makeSampleText({
       faceId: 'front',
+      zIndex: 1,
       content: 'Tanepack',
       transform: {
         x: bounds.center.x,
@@ -119,13 +155,27 @@ describe('bakeTexture', () => {
         rotation: 0,
       },
     });
+    const logoImg = makeSampleImage({
+      faceId: 'front',
+      src: imgSrc,
+      zIndex: 2,
+      naturalWidth: 200,
+      naturalHeight: 100,
+      transform: {
+        x: bounds.minX + 10,
+        y: bounds.minY + 20,
+        width: 30,
+        height: 30,
+        rotation: 0,
+      },
+    });
     const otherFaceText = makeSampleText({
       id: 'other',
       faceId: 'right',
       content: 'ShouldNotDrawOnFront',
     });
 
-    const texture = bakeFaceTexture(front, [centeredText, otherFaceText], 2);
+    const texture = bakeFaceTexture(front, [centeredText, logoImg, otherFaceText], 2);
     const canvas = texture.image as HTMLCanvasElement;
 
     expect(canvas.width).toBe(760);
@@ -141,6 +191,16 @@ describe('bakeTexture', () => {
     expect(drawnText).toBe('Tanepack');
     expect(drawnX).toBeCloseTo(380, 1);
     expect(drawnY).toBeCloseTo(380, 1);
+
+    // 200x100 natural aspect inside a 30x30mm box scales via contain to 30x15mm centered vertically
+    expect(drawImage).toHaveBeenCalledTimes(1);
+    const [imgEl, dx, dy, dw, dh] = drawImage.mock.calls[0]!;
+    expect(imgEl).toBe(fakeImg);
+    const pxPerMm = 760 / bounds.width;
+    expect(dx).toBeCloseTo(10 * pxPerMm, 1);
+    expect(dy).toBeCloseTo((20 + 7.5) * pxPerMm, 1);
+    expect(dw).toBeCloseTo(30 * pxPerMm, 1);
+    expect(dh).toBeCloseTo(15 * pxPerMm, 1);
 
     texture.dispose();
   });
