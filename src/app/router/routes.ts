@@ -7,4 +7,5 @@ export const ROUTES = {
 export interface RouteMetaHandle {
   title: string;
   showBackButton: boolean;
+  hideTopBar?: boolean | undefined;
 }

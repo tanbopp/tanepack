@@ -17,6 +17,7 @@ const homeHandle: RouteMetaHandle = {
 const editorHandle: RouteMetaHandle = {
   title: 'Tanepack — Editor',
   showBackButton: true,
+  hideTopBar: true,
 };
 
 const notFoundHandle: RouteMetaHandle = {

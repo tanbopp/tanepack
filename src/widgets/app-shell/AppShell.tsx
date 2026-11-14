@@ -6,6 +6,7 @@ import { TopBar } from '@widgets/app-shell/TopBar';
 interface RouteHandle {
   title?: string | undefined;
   showBackButton?: boolean | undefined;
+  hideTopBar?: boolean | undefined;
 }
 
 function isRouteHandle(value: unknown): value is RouteHandle {
@@ -29,8 +30,13 @@ export function AppShell() {
         color: 'var(--md-sys-color-on-surface)',
       }}
     >
-      <TopBar title={activeHandle?.title} showBackButton={activeHandle?.showBackButton} />
-      <Box component="main" sx={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+      {!activeHandle?.hideTopBar && (
+        <TopBar title={activeHandle?.title} showBackButton={activeHandle?.showBackButton} />
+      )}
+      <Box
+        component="main"
+        sx={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}
+      >
         <Outlet />
       </Box>
     </Box>
