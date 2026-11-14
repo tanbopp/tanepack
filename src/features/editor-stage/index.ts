@@ -1,5 +1,13 @@
 // Public barrel exports for the 2D editor dieline stage feature
-export { DEFAULT_DIELINE_DIMENSIONS, DielineStage, type DielineStageProps } from './DielineStage';
+export { DielineStage, type DielineStageProps } from './DielineStage';
+export {
+  type AddTextElementOptions,
+  DEFAULT_DIELINE_DIMENSIONS,
+  DEFAULT_TEXT_CONTENT,
+  type EditorStageStoreState,
+  type TextElementPatch,
+  useEditorStore,
+} from './store';
 export {
   clampZoom,
   computeFitViewport,

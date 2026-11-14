@@ -5,10 +5,10 @@ import Divider from '@mui/material/Divider';
 import Slider from '@mui/material/Slider';
 import Toolbar from '@mui/material/Toolbar';
 import Typography from '@mui/material/Typography';
-import { lazy, Suspense, useState } from 'react';
+import { type KeyboardEvent, lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { DielineStage } from '@features/editor-stage';
-import { M3Button, M3CircularProgress, M3Icon, M3IconButton } from '@shared/ui';
+import { DEFAULT_TEXT_CONTENT, DielineStage, useEditorStore } from '@features/editor-stage';
+import { M3Button, M3CircularProgress, M3Icon, M3IconButton, M3TextField } from '@shared/ui';
 
 type EditorRailToolId = 'templates' | 'text' | 'shapes' | 'upload';
 type EditorViewMode = '2d' | '3d';
@@ -21,10 +21,12 @@ interface EditorRailItem {
 
 const LEFT_RAIL_ITEMS: readonly EditorRailItem[] = [
   { id: 'templates', label: 'Templates', icon: 'grid_view' },
-  { id: 'text', label: 'Text', icon: 'title' },
+  { id: 'text', label: 'Add Text', icon: 'title' },
   { id: 'shapes', label: 'Shapes', icon: 'shapes' },
   { id: 'upload', label: 'Upload', icon: 'upload' },
 ];
+
+const TEXT_COMMIT_DEBOUNCE_MS = 350;
 
 const LazyBoxViewer = lazy(() =>
   import('@features/editor-3d').then((module) => ({ default: module.BoxViewer })),
@@ -34,7 +36,88 @@ export default function EditorPage() {
   const navigate = useNavigate();
   const [selectedTool, setSelectedTool] = useState<EditorRailToolId | null>(null);
   const [viewMode, setViewMode] = useState<EditorViewMode>('2d');
-  const [foldAngle, setFoldAngle] = useState<number>(0);
+  const commitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const dieline = useEditorStore((state) => state.dieline);
+  const elements = useEditorStore((state) => state.elements);
+  const committedElements = useEditorStore((state) => state.committedElements);
+  const selectedElementId = useEditorStore((state) => state.selectedElementId);
+  const foldAngle = useEditorStore((state) => state.foldAngle);
+  const addElement = useEditorStore((state) => state.addElement);
+  const updateElement = useEditorStore((state) => state.updateElement);
+  const removeElement = useEditorStore((state) => state.removeElement);
+  const commitElements = useEditorStore((state) => state.commitElements);
+  const setFoldAngle = useEditorStore((state) => state.setFoldAngle);
+
+  const selectedElement = elements.find((el) => el.id === selectedElementId) ?? null;
+  const selectedFaceName = selectedElement
+    ? (dieline.faces.find((face) => face.id === selectedElement.faceId)?.name ??
+      selectedElement.faceId)
+    : null;
+
+  const clearCommitTimer = () => {
+    if (commitTimerRef.current !== null) {
+      clearTimeout(commitTimerRef.current);
+      commitTimerRef.current = null;
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      if (commitTimerRef.current !== null) {
+        clearTimeout(commitTimerRef.current);
+      }
+    };
+  }, []);
+
+  const handleRailItemClick = (toolId: EditorRailToolId) => {
+    if (toolId === 'text') {
+      clearCommitTimer();
+      setSelectedTool('text');
+      addElement({ faceId: 'front', content: DEFAULT_TEXT_CONTENT });
+      return;
+    }
+    setSelectedTool((prev) => (prev === toolId ? null : toolId));
+  };
+
+  const handleSwitchViewMode = (mode: EditorViewMode) => {
+    if (mode === '3d') {
+      clearCommitTimer();
+      commitElements();
+    }
+    setViewMode(mode);
+  };
+
+  const handleTextContentChange = (nextContent: string) => {
+    if (!selectedElement || selectedElement.type !== 'text') {
+      return;
+    }
+    updateElement(selectedElement.id, { content: nextContent }, false);
+    clearCommitTimer();
+    commitTimerRef.current = setTimeout(() => {
+      commitElements();
+      commitTimerRef.current = null;
+    }, TEXT_COMMIT_DEBOUNCE_MS);
+  };
+
+  const handleTextContentCommit = () => {
+    clearCommitTimer();
+    commitElements();
+  };
+
+  const handleTextKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === 'Enter') {
+      handleTextContentCommit();
+    }
+  };
+
+  const handleDeleteSelected = () => {
+    if (!selectedElement) {
+      return;
+    }
+    clearCommitTimer();
+    removeElement(selectedElement.id);
+  };
 
   return (
     <Box
@@ -114,7 +197,7 @@ export default function EditorPage() {
               size="small"
               aria-pressed={viewMode === '2d'}
               startIcon={<M3Icon name="polyline" size={18} />}
-              onClick={() => setViewMode('2d')}
+              onClick={() => handleSwitchViewMode('2d')}
               sx={{
                 minHeight: 32,
                 px: 1.75,
@@ -131,7 +214,7 @@ export default function EditorPage() {
               size="small"
               aria-pressed={viewMode === '3d'}
               startIcon={<M3Icon name="view_in_ar" size={18} />}
-              onClick={() => setViewMode('3d')}
+              onClick={() => handleSwitchViewMode('3d')}
               sx={{
                 minHeight: 32,
                 px: 1.75,
@@ -178,6 +261,8 @@ export default function EditorPage() {
         >
           {LEFT_RAIL_ITEMS.map((item) => {
             const isActive = selectedTool === item.id;
+            const tooltip =
+              item.id === 'text' ? 'Add text onto Front face' : `${item.label} (coming soon)`;
             return (
               <Box
                 key={item.id}
@@ -192,9 +277,9 @@ export default function EditorPage() {
                   icon={item.icon}
                   label={item.label}
                   filled={isActive}
-                  tooltip={`${item.label} (coming soon)`}
+                  tooltip={tooltip}
                   aria-pressed={isActive}
-                  onClick={() => setSelectedTool((prev) => (prev === item.id ? null : item.id))}
+                  onClick={() => handleRailItemClick(item.id)}
                   sx={{
                     width: 48,
                     height: 36,
@@ -251,7 +336,7 @@ export default function EditorPage() {
                 </Box>
               }
             >
-              <LazyBoxViewer foldAngle={foldAngle} />
+              <LazyBoxViewer dieline={dieline} elements={committedElements} foldAngle={foldAngle} />
             </Suspense>
           )}
         </Box>
@@ -336,19 +421,84 @@ export default function EditorPage() {
 
           <Divider />
 
-          <Box
-            sx={{
-              flex: 1,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              textAlign: 'center',
-            }}
-          >
-            <Typography variant="bodyMedium" color="text.secondary">
-              Properties panel coming soon.
-            </Typography>
-          </Box>
+          {selectedElement && selectedElement.type === 'text' ? (
+            <Box
+              data-testid="text-properties-panel"
+              sx={{
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 2,
+              }}
+            >
+              <Box
+                sx={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 1,
+                }}
+              >
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}>
+                  <Typography variant="titleSmall" component="h2" color="text.primary">
+                    Text Properties
+                  </Typography>
+                  {selectedFaceName && (
+                    <Typography
+                      variant="labelSmall"
+                      component="span"
+                      sx={{
+                        px: 1,
+                        py: 0.25,
+                        borderRadius: '9999px',
+                        backgroundColor: 'var(--md-sys-color-surface-container-high)',
+                        color: 'var(--md-sys-color-on-surface-variant)',
+                      }}
+                    >
+                      {selectedFaceName}
+                    </Typography>
+                  )}
+                </Box>
+                <M3IconButton
+                  icon="delete"
+                  label="Delete selected text"
+                  tooltip="Remove text element"
+                  size="small"
+                  onClick={handleDeleteSelected}
+                  sx={{ color: 'var(--md-sys-color-error)' }}
+                />
+              </Box>
+
+              <M3TextField
+                label="Text Content"
+                value={selectedElement.content}
+                onChange={(event) => handleTextContentChange(event.target.value)}
+                onBlur={handleTextContentCommit}
+                onKeyDown={handleTextKeyDown}
+                placeholder="Enter label text"
+              />
+
+              <Typography variant="bodySmall" color="text.secondary">
+                Live edits update the 2D sheet immediately and bake onto the {selectedFaceName} face
+                in 3D when committed.
+              </Typography>
+            </Box>
+          ) : (
+            <Box
+              sx={{
+                flex: 1,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                textAlign: 'center',
+                px: 1,
+              }}
+            >
+              <Typography variant="bodyMedium" color="text.secondary">
+                Click &ldquo;Add Text&rdquo; in the left rail or select an element on the dieline to
+                edit artwork properties.
+              </Typography>
+            </Box>
+          )}
         </Box>
       </Box>
     </Box>

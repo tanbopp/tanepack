@@ -200,6 +200,69 @@ describe('buildBoxGeometry', () => {
     model.dispose();
   });
 
+  it('assigns normalized [0, 1] UVs matching millimeter face bounds and preserves sourceFaceId', () => {
+    const dieline = generateTuckEndBox(SAMPLE_DIMENSIONS);
+    const model = buildBoxGeometry(dieline);
+
+    const partsById = new Map<string, (typeof model.root.faces)[number]>();
+    const visit = (node: KinematicBoxNode) => {
+      for (const part of node.faces) {
+        partsById.set(part.faceId, part);
+      }
+      for (const child of node.children) {
+        visit(child);
+      }
+    };
+    visit(model.root);
+
+    expect(partsById.get('front')?.sourceFaceId).toBe('front');
+    expect(partsById.get('top-tuck')?.sourceFaceId).toBe('top-tuck');
+    expect(partsById.get('top-tuck-tongue')?.sourceFaceId).toBe('top-tuck');
+    expect(partsById.get('bottom-tuck-tongue')?.sourceFaceId).toBe('bottom-tuck');
+
+    for (const part of partsById.values()) {
+      const posAttr = part.geometry.getAttribute('position');
+      const uvAttr = part.geometry.getAttribute('uv');
+      expect(posAttr).toBeDefined();
+      expect(uvAttr).toBeDefined();
+      expect(uvAttr?.itemSize).toBe(2);
+      expect(uvAttr?.count).toBe(posAttr?.count);
+
+      for (let i = 0; i < (uvAttr?.count ?? 0); i += 1) {
+        const u = uvAttr!.getX(i);
+        const v = uvAttr!.getY(i);
+        expect(u).toBeGreaterThanOrEqual(0);
+        expect(u).toBeLessThanOrEqual(1);
+        expect(v).toBeGreaterThanOrEqual(0);
+        expect(v).toBeLessThanOrEqual(1);
+      }
+    }
+
+    // Front face UVs span full [0, 1] horizontally & vertically (v=1 is canvas top / minY)
+    const frontUv = partsById.get('front')!.geometry.getAttribute('uv')!;
+    const us: number[] = [];
+    const vs: number[] = [];
+    for (let i = 0; i < frontUv.count; i += 1) {
+      us.push(frontUv.getX(i));
+      vs.push(frontUv.getY(i));
+    }
+    expect(Math.min(...us)).toBeCloseTo(0, 5);
+    expect(Math.max(...us)).toBeCloseTo(1, 5);
+    expect(Math.min(...vs)).toBeCloseTo(0, 5);
+    expect(Math.max(...vs)).toBeCloseTo(1, 5);
+
+    // Split lid & tongue share top-tuck's UV range cleanly without exceeding [0, 1]
+    const lidUv = partsById.get('top-tuck')!.geometry.getAttribute('uv')!;
+    const tongueUv = partsById.get('top-tuck-tongue')!.geometry.getAttribute('uv')!;
+    const lidVs = Array.from({ length: lidUv.count }, (_, i) => lidUv.getY(i));
+    const tongueVs = Array.from({ length: tongueUv.count }, (_, i) => tongueUv.getY(i));
+    expect(Math.max(...tongueVs)).toBeCloseTo(1, 5);
+    expect(Math.min(...lidVs)).toBeCloseTo(0, 5);
+    expect(Math.max(...lidVs)).toBeLessThan(1);
+
+    model.dispose();
+  });
+
   it('creates a lightweight 64x64 RGBA DataTexture with soft radial alpha falloff', () => {
     const texture = createRadialShadowTexture(64);
     expect(texture.image.width).toBe(64);

@@ -16,6 +16,7 @@ export interface FaceBoundsMm {
 
 export interface KinematicFacePart {
   faceId: string;
+  sourceFaceId: string;
   name: string;
   geometry: THREE.BufferGeometry;
   edgeGeometry: THREE.BufferGeometry;
@@ -289,15 +290,46 @@ function clipPolygonByHorizontalLine(
   return output;
 }
 
+function applyNormalizedFaceUvs(
+  geometry: THREE.BufferGeometry,
+  pivotMm: Point,
+  uvBoundsMm: FaceBoundsMm,
+): void {
+  const positionAttr = geometry.getAttribute('position');
+  if (!(positionAttr instanceof THREE.BufferAttribute)) {
+    return;
+  }
+
+  const spanX = Math.max(1e-6, uvBoundsMm.maxX - uvBoundsMm.minX);
+  const spanY = Math.max(1e-6, uvBoundsMm.maxY - uvBoundsMm.minY);
+  const uvArray = new Float32Array(positionAttr.count * 2);
+
+  for (let i = 0; i < positionAttr.count; i += 1) {
+    const xMm = pivotMm.x + positionAttr.getX(i) / DIELINE_SCALE_TO_3D;
+    const yMm = pivotMm.y + positionAttr.getZ(i) / DIELINE_SCALE_TO_3D;
+    const u = Math.min(1, Math.max(0, (xMm - uvBoundsMm.minX) / spanX));
+    // CanvasTexture uses flipY = true by default, so SVG minY maps to canvas top (v = 1)
+    const v = Math.min(1, Math.max(0, 1 - (yMm - uvBoundsMm.minY) / spanY));
+    uvArray[i * 2] = u;
+    uvArray[i * 2 + 1] = v;
+  }
+
+  geometry.setAttribute('uv', new THREE.BufferAttribute(uvArray, 2));
+}
+
 function buildGeometryPartFromShape(
   faceId: string,
+  sourceFaceId: string,
   name: string,
   shape: THREE.Shape,
   boundsMm: FaceBoundsMm,
+  pivotMm: Point,
+  uvBoundsMm: FaceBoundsMm,
   isInnerLayer: boolean,
 ): KinematicFacePart {
   const geometry = new THREE.ShapeGeometry(shape, 8);
   geometry.rotateX(-Math.PI / 2);
+  applyNormalizedFaceUvs(geometry, pivotMm, uvBoundsMm);
   geometry.computeVertexNormals();
   geometry.computeBoundingBox();
 
@@ -305,6 +337,7 @@ function buildGeometryPartFromShape(
 
   return {
     faceId,
+    sourceFaceId,
     name,
     geometry,
     edgeGeometry,
@@ -316,7 +349,16 @@ function buildGeometryPartFromShape(
 function createFaceGeometryPart(face: Face, pivotMm: Point): KinematicFacePart {
   const { shape, boundsMm } = parseSvgPathToShape(face.path, pivotMm);
   const isInnerLayer = face.id === 'glue-tab' || face.id.includes('dust');
-  return buildGeometryPartFromShape(face.id, face.name, shape, boundsMm, isInnerLayer);
+  return buildGeometryPartFromShape(
+    face.id,
+    face.id,
+    face.name,
+    shape,
+    boundsMm,
+    pivotMm,
+    boundsMm,
+    isInnerLayer,
+  );
 }
 
 /** Sample face SVG path vertices in raw 2D millimeter coordinates (preserving Q curve detail). */
@@ -515,9 +557,12 @@ export function buildBoxGeometry(dieline: Dieline): KinematicBoxModel {
           const lidShapeData = createShapeFromMmPolygon(lidPoly, pivotMm);
           const lidPart = buildGeometryPartFromShape(
             face.id,
+            face.id,
             face.name,
             lidShapeData.shape,
             lidShapeData.boundsMm,
+            pivotMm,
+            faceBounds,
             false,
           );
           directFaces.push(lidPart);
@@ -527,9 +572,12 @@ export function buildBoxGeometry(dieline: Dieline): KinematicBoxModel {
           const tongueShapeData = createShapeFromMmPolygon(tonguePoly, tonguePivotMm);
           const tonguePart = buildGeometryPartFromShape(
             `${face.id}-tongue`,
+            face.id,
             `${face.name} Tongue`,
             tongueShapeData.shape,
             tongueShapeData.boundsMm,
+            tonguePivotMm,
+            faceBounds,
             true,
           );
           createdParts.push(tonguePart);

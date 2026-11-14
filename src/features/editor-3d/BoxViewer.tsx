@@ -3,15 +3,24 @@ import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 import { OrbitControls } from '@react-three/drei';
 import { Canvas, useThree } from '@react-three/fiber';
-import { useEffect, useMemo } from 'react';
+import { memo, useEffect, useMemo } from 'react';
 import * as THREE from 'three';
+import type { DesignElement } from '@entities/design-document';
 import { generateTuckEndBox } from '@entities/dieline';
 import type { Dieline } from '@entities/dieline/types';
+import {
+  bakeFaceTexture,
+  buildFaceBakeSignature,
+  DEFAULT_BAKE_SCALE,
+  getFaceElementsForFace,
+} from './bakeTexture';
 import {
   buildBoxGeometry,
   createRadialShadowTexture,
   DIELINE_SCALE_TO_3D,
+  type KinematicBoxModel,
   type KinematicBoxNode,
+  type KinematicFacePart,
 } from './buildBoxGeometry';
 
 export const DEFAULT_3D_DIMENSIONS: Dieline['dimensions'] = {
@@ -22,24 +31,82 @@ export const DEFAULT_3D_DIMENSIONS: Dieline['dimensions'] = {
   bleedSize: 3,
 };
 
+const EMPTY_ELEMENTS: readonly DesignElement[] = [];
+
 export interface BoxViewerProps {
+  dieline?: Dieline | undefined;
   dimensions?: Dieline['dimensions'] | undefined;
+  elements?: readonly DesignElement[] | undefined;
   foldAngle?: number | undefined;
 }
+
+interface FaceMaterialEntry {
+  signature: string | null;
+  texture: THREE.CanvasTexture | null;
+  outerMaterial: THREE.MeshStandardMaterial;
+  innerMaterial: THREE.MeshStandardMaterial;
+}
+
+function createFaceMaterialEntry(): FaceMaterialEntry {
+  const outerMaterial = new THREE.MeshStandardMaterial({
+    color: '#ffffff',
+    roughness: 0.72,
+    metalness: 0.02,
+    side: THREE.DoubleSide,
+  });
+  const innerMaterial = new THREE.MeshStandardMaterial({
+    color: '#ffffff',
+    roughness: 0.72,
+    metalness: 0.02,
+    side: THREE.DoubleSide,
+    polygonOffset: true,
+    polygonOffsetFactor: 1,
+    polygonOffsetUnits: 1,
+  });
+  return {
+    signature: null,
+    texture: null,
+    outerMaterial,
+    innerMaterial,
+  };
+}
+
+interface BakedFaceMeshProps {
+  part: KinematicFacePart;
+  entry: FaceMaterialEntry;
+  edgeMaterial: THREE.LineBasicMaterial;
+}
+
+const BakedFaceMesh = memo(function BakedFaceMesh({
+  part,
+  entry,
+  edgeMaterial,
+}: BakedFaceMeshProps) {
+  return (
+    <group>
+      <mesh
+        name={`face-${part.faceId}`}
+        geometry={part.geometry}
+        material={part.isInnerLayer ? entry.innerMaterial : entry.outerMaterial}
+      />
+      <lineSegments geometry={part.edgeGeometry} material={edgeMaterial} />
+    </group>
+  );
+});
 
 interface KinematicGroupMeshProps {
   node: KinematicBoxNode;
   foldAngle: number;
-  outerMaterial: THREE.MeshStandardMaterial;
-  innerMaterial: THREE.MeshStandardMaterial;
+  faceMaterials: ReadonlyMap<string, FaceMaterialEntry>;
+  fallbackEntry: FaceMaterialEntry;
   edgeMaterial: THREE.LineBasicMaterial;
 }
 
 function KinematicGroupMesh({
   node,
   foldAngle,
-  outerMaterial,
-  innerMaterial,
+  faceMaterials,
+  fallbackEntry,
   edgeMaterial,
 }: KinematicGroupMeshProps) {
   const [minDeg, maxDeg] = node.animatedAngleRange;
@@ -55,22 +122,20 @@ function KinematicGroupMesh({
   return (
     <group name={node.id} position={node.position} rotation={rotation}>
       {node.faces.map((face) => (
-        <group key={face.faceId}>
-          <mesh
-            name={`face-${face.faceId}`}
-            geometry={face.geometry}
-            material={face.isInnerLayer ? innerMaterial : outerMaterial}
-          />
-          <lineSegments geometry={face.edgeGeometry} material={edgeMaterial} />
-        </group>
+        <BakedFaceMesh
+          key={face.faceId}
+          part={face}
+          entry={faceMaterials.get(face.sourceFaceId) ?? fallbackEntry}
+          edgeMaterial={edgeMaterial}
+        />
       ))}
       {node.children.map((child) => (
         <KinematicGroupMesh
           key={child.id}
           node={child}
           foldAngle={foldAngle}
-          outerMaterial={outerMaterial}
-          innerMaterial={innerMaterial}
+          faceMaterials={faceMaterials}
+          fallbackEntry={fallbackEntry}
           edgeMaterial={edgeMaterial}
         />
       ))}
@@ -78,49 +143,126 @@ function KinematicGroupMesh({
   );
 }
 
-interface FrameloopInvalidatorProps {
+interface CartonAssemblyProps {
+  dieline: Dieline;
+  model: KinematicBoxModel;
+  elements: readonly DesignElement[];
   foldAngle: number;
-  dimensions: Dieline['dimensions'];
+  edgeMaterial: THREE.LineBasicMaterial;
 }
 
-function FrameloopInvalidator({ foldAngle, dimensions }: FrameloopInvalidatorProps) {
+function CartonAssembly({
+  dieline,
+  model,
+  elements,
+  foldAngle,
+  edgeMaterial,
+}: CartonAssemblyProps) {
   const invalidate = useThree((state) => state.invalidate);
+
+  const { faceMaterials, fallbackEntry } = useMemo(() => {
+    const map = new Map<string, FaceMaterialEntry>();
+    for (const face of dieline.faces) {
+      map.set(face.id, createFaceMaterialEntry());
+    }
+    return {
+      faceMaterials: map,
+      fallbackEntry: createFaceMaterialEntry(),
+    };
+  }, [dieline]);
+
+  // Dispose per-face textures and materials cleanly when dieline changes or viewer unmounts
+  useEffect(() => {
+    return () => {
+      for (const entry of faceMaterials.values()) {
+        entry.texture?.dispose();
+        entry.texture = null;
+        entry.signature = null;
+        entry.outerMaterial.map = null;
+        entry.innerMaterial.map = null;
+        entry.outerMaterial.dispose();
+        entry.innerMaterial.dispose();
+      }
+      fallbackEntry.outerMaterial.dispose();
+      fallbackEntry.innerMaterial.dispose();
+    };
+  }, [faceMaterials, fallbackEntry]);
+
+  // Re-bake only faces whose committed outside artwork signature changed, then demand a frame
+  useEffect(() => {
+    let dirty = false;
+
+    for (const face of dieline.faces) {
+      const entry = faceMaterials.get(face.id);
+      if (!entry) {
+        continue;
+      }
+
+      const faceElements = getFaceElementsForFace(face.id, elements);
+      const nextSignature =
+        faceElements.length > 0
+          ? buildFaceBakeSignature(face, faceElements, DEFAULT_BAKE_SCALE)
+          : null;
+
+      if (entry.signature === nextSignature) {
+        continue;
+      }
+
+      entry.texture?.dispose();
+      const nextTexture =
+        nextSignature !== null ? bakeFaceTexture(face, faceElements, DEFAULT_BAKE_SCALE) : null;
+      entry.texture = nextTexture;
+      entry.signature = nextSignature;
+      entry.outerMaterial.map = nextTexture;
+      entry.outerMaterial.needsUpdate = true;
+      entry.innerMaterial.map = nextTexture;
+      entry.innerMaterial.needsUpdate = true;
+      dirty = true;
+    }
+
+    if (dirty) {
+      invalidate();
+    }
+  }, [dieline, elements, faceMaterials, invalidate]);
 
   useEffect(() => {
     invalidate();
-  }, [foldAngle, dimensions, invalidate]);
+  }, [foldAngle, dieline, invalidate]);
 
-  return null;
+  return (
+    <group position={[0, 0.002, 0]}>
+      <KinematicGroupMesh
+        node={model.root}
+        foldAngle={foldAngle}
+        faceMaterials={faceMaterials}
+        fallbackEntry={fallbackEntry}
+        edgeMaterial={edgeMaterial}
+      />
+    </group>
+  );
 }
 
-export function BoxViewer({ dimensions = DEFAULT_3D_DIMENSIONS, foldAngle = 0 }: BoxViewerProps) {
-  const dieline = useMemo(() => generateTuckEndBox(dimensions), [dimensions]);
+export function BoxViewer({
+  dieline: dielineProp,
+  dimensions = DEFAULT_3D_DIMENSIONS,
+  elements = EMPTY_ELEMENTS,
+  foldAngle = 0,
+}: BoxViewerProps) {
+  const dieline = useMemo(
+    () => dielineProp ?? generateTuckEndBox(dimensions),
+    [dielineProp, dimensions],
+  );
   const model = useMemo(() => buildBoxGeometry(dieline), [dieline]);
   const shadowTexture = useMemo(() => createRadialShadowTexture(64), []);
-
-  const materials = useMemo(() => {
-    const outerMaterial = new THREE.MeshStandardMaterial({
-      color: '#90caf9',
-      roughness: 0.62,
-      metalness: 0.04,
-      side: THREE.DoubleSide,
-    });
-    const innerMaterial = new THREE.MeshStandardMaterial({
-      color: '#90caf9',
-      roughness: 0.62,
-      metalness: 0.04,
-      side: THREE.DoubleSide,
-      polygonOffset: true,
-      polygonOffsetFactor: 1,
-      polygonOffsetUnits: 1,
-    });
-    const edgeMaterial = new THREE.LineBasicMaterial({
-      color: '#2b507d',
-      transparent: true,
-      opacity: 0.75,
-    });
-    return { outerMaterial, innerMaterial, edgeMaterial };
-  }, []);
+  const edgeMaterial = useMemo(
+    () =>
+      new THREE.LineBasicMaterial({
+        color: '#2b507d',
+        transparent: true,
+        opacity: 0.65,
+      }),
+    [],
+  );
 
   useEffect(() => {
     return () => {
@@ -131,16 +273,15 @@ export function BoxViewer({ dimensions = DEFAULT_3D_DIMENSIONS, foldAngle = 0 }:
   useEffect(() => {
     return () => {
       shadowTexture.dispose();
-      materials.outerMaterial.dispose();
-      materials.innerMaterial.dispose();
-      materials.edgeMaterial.dispose();
+      edgeMaterial.dispose();
     };
-  }, [materials, shadowTexture]);
+  }, [edgeMaterial, shadowTexture]);
 
   // Smoothly tighten contact shadow footprint as side panels fold from 0° flat to 90° closed
   const foldProgress = Math.min(1, Math.max(0, foldAngle / 90));
-  const frontWidth3d = (dimensions.length + dimensions.thickness) * DIELINE_SCALE_TO_3D;
-  const frontDepth3d = (dimensions.height + dimensions.thickness) * DIELINE_SCALE_TO_3D;
+  const activeDimensions = dieline.dimensions;
+  const frontWidth3d = (activeDimensions.length + activeDimensions.thickness) * DIELINE_SCALE_TO_3D;
+  const frontDepth3d = (activeDimensions.height + activeDimensions.thickness) * DIELINE_SCALE_TO_3D;
   const shadowWidth =
     THREE.MathUtils.lerp(model.shadowExtent.width, frontWidth3d * 1.35, foldProgress) * 1.15;
   const shadowDepth =
@@ -167,7 +308,6 @@ export function BoxViewer({ dimensions = DEFAULT_3D_DIMENSIONS, foldAngle = 0 }:
         camera={{ position: [2.6, 2.8, 4.1], fov: 40, near: 0.05, far: 100 }}
       >
         <color attach="background" args={['#f3ece3']} />
-        <FrameloopInvalidator foldAngle={foldAngle} dimensions={dimensions} />
 
         {/* Strictly 1 ambient light + 1 directional light, no heavy shadows or post-processing */}
         <ambientLight intensity={0.95} />
@@ -181,15 +321,13 @@ export function BoxViewer({ dimensions = DEFAULT_3D_DIMENSIONS, foldAngle = 0 }:
         </mesh>
 
         {/* Carton slightly above floor to prevent z-fighting at 0° */}
-        <group position={[0, 0.002, 0]}>
-          <KinematicGroupMesh
-            node={model.root}
-            foldAngle={foldAngle}
-            outerMaterial={materials.outerMaterial}
-            innerMaterial={materials.innerMaterial}
-            edgeMaterial={materials.edgeMaterial}
-          />
-        </group>
+        <CartonAssembly
+          dieline={dieline}
+          model={model}
+          elements={elements}
+          foldAngle={foldAngle}
+          edgeMaterial={edgeMaterial}
+        />
 
         <OrbitControls
           makeDefault

@@ -387,3 +387,61 @@ export function buildOuterBleedPath(p: BleedLayoutParams): string {
 
   return cmds.join(' ');
 }
+
+export interface SvgPathBoundsMm {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+  width: number;
+  height: number;
+  center: Point;
+}
+
+const PATH_NUMBERS_REGEX = /[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?/gi;
+
+/** Computes the millimeter bounding box and center of an SVG path using absolute M/L/Q/Z coords. */
+export function computeSvgPathBoundsMm(svgPath: string): SvgPathBoundsMm {
+  const numbers = svgPath.match(PATH_NUMBERS_REGEX)?.map(Number) ?? [];
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+
+  for (let i = 0; i + 1 < numbers.length; i += 2) {
+    const x = numbers[i];
+    const y = numbers[i + 1];
+    if (x === undefined || y === undefined) {
+      continue;
+    }
+    if (x < minX) minX = x;
+    if (y < minY) minY = y;
+    if (x > maxX) maxX = x;
+    if (y > maxY) maxY = y;
+  }
+
+  if (!Number.isFinite(minX)) {
+    return {
+      minX: 0,
+      minY: 0,
+      maxX: 0,
+      maxY: 0,
+      width: 0,
+      height: 0,
+      center: { x: 0, y: 0 },
+    };
+  }
+
+  return {
+    minX,
+    minY,
+    maxX,
+    maxY,
+    width: maxX - minX,
+    height: maxY - minY,
+    center: {
+      x: (minX + maxX) * 0.5,
+      y: (minY + maxY) * 0.5,
+    },
+  };
+}

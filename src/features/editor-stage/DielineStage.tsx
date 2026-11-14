@@ -1,4 +1,4 @@
-// Interactive 2D SVG dieline viewport supporting mm coordinates, wheel zoom, and pan controls
+// Interactive 2D SVG dieline viewport supporting mm coordinates, artwork layer, zoom, and pan
 import Box from '@mui/material/Box';
 import Divider from '@mui/material/Divider';
 import Typography from '@mui/material/Typography';
@@ -14,6 +14,7 @@ import { generateTuckEndBox } from '@entities/dieline';
 import type { Dieline, Point } from '@entities/dieline/types';
 import { mmToPx } from '@shared/lib/units';
 import { M3Button, M3Icon, M3IconButton } from '@shared/ui';
+import { useEditorStore } from './store';
 import {
   clampZoom,
   computeFitViewport,
@@ -22,14 +23,6 @@ import {
   type StageViewport,
   zoomAtPoint,
 } from './viewport';
-
-export const DEFAULT_DIELINE_DIMENSIONS: Dieline['dimensions'] = {
-  length: 100,
-  width: 50,
-  height: 100,
-  thickness: 0.5,
-  bleedSize: 3,
-};
 
 const SHEET_EXTRA_MARGIN_MM = 6;
 const HUD_ELEVATION_SHADOW = '0px 1px 2px rgba(0, 0, 0, 0.2), 0px 2px 6px 2px rgba(0, 0, 0, 0.1)';
@@ -47,10 +40,15 @@ function isEditableTarget(target: EventTarget | null): boolean {
   return tagName === 'INPUT' || tagName === 'TEXTAREA' || target.isContentEditable;
 }
 
-export function DielineStage({ dimensions = DEFAULT_DIELINE_DIMENSIONS }: DielineStageProps) {
+export function DielineStage({ dimensions }: DielineStageProps) {
   const stageRef = useRef<HTMLDivElement | null>(null);
   const hasAutoFittedRef = useRef(false);
   const dragOriginRef = useRef<{ clientX: number; clientY: number; pan: Point } | null>(null);
+
+  const storeDieline = useEditorStore((state) => state.dieline);
+  const elements = useEditorStore((state) => state.elements);
+  const selectedElementId = useEditorStore((state) => state.selectedElementId);
+  const selectElement = useEditorStore((state) => state.selectElement);
 
   const [viewport, setViewport] = useState<StageViewport>({
     zoom: 1,
@@ -59,7 +57,18 @@ export function DielineStage({ dimensions = DEFAULT_DIELINE_DIMENSIONS }: Dielin
   const [isSpacePressed, setIsSpacePressed] = useState(false);
   const [isPanning, setIsPanning] = useState(false);
 
-  const dieline = useMemo(() => generateTuckEndBox(dimensions), [dimensions]);
+  const dieline = useMemo(
+    () => (dimensions ? generateTuckEndBox(dimensions) : storeDieline),
+    [dimensions, storeDieline],
+  );
+
+  const visibleTextElements = useMemo(
+    () =>
+      elements
+        .filter((el) => el.type === 'text' && el.side === 'outside')
+        .sort((a, b) => a.zIndex - b.zIndex),
+    [elements],
+  );
 
   // Precompute <path> strings for folds once per generated dieline
   const foldPaths = useMemo(
@@ -261,6 +270,9 @@ export function DielineStage({ dimensions = DEFAULT_DIELINE_DIMENSIONS }: Dielin
     const isMiddleClick = event.button === 1;
     const isSpaceLeftClick = event.button === 0 && isSpacePressed;
     if (!isMiddleClick && !isSpaceLeftClick) {
+      if (event.button === 0) {
+        selectElement(null);
+      }
       return;
     }
 
@@ -354,6 +366,62 @@ export function DielineStage({ dimensions = DEFAULT_DIELINE_DIMENSIONS }: Dielin
                 strokeLinejoin="round"
               />
             ))}
+          </g>
+
+          {/* 2D Design artwork layer */}
+          <g data-layer="artwork">
+            {visibleTextElements.map((el) => {
+              if (el.type !== 'text') {
+                return null;
+              }
+              const isSelected = el.id === selectedElementId;
+              const boxWidth = Math.max(
+                el.transform.width,
+                el.content.length * el.style.fontSize * 0.62,
+              );
+              const boxHeight = el.style.fontSize * 1.45;
+              return (
+                <g
+                  key={el.id}
+                  data-testid={`stage-text-${el.id}`}
+                  onMouseDown={(event) => {
+                    if (event.button === 0 && !isSpacePressed) {
+                      event.stopPropagation();
+                      selectElement(el.id);
+                    }
+                  }}
+                  style={{ cursor: isSpacePressed ? 'grab' : 'pointer' }}
+                >
+                  {isSelected && (
+                    <rect
+                      x={el.transform.x - boxWidth * 0.5 - 3}
+                      y={el.transform.y - boxHeight * 0.5}
+                      width={boxWidth + 6}
+                      height={boxHeight}
+                      rx={1.5}
+                      fill="none"
+                      stroke="var(--md-sys-color-primary)"
+                      strokeWidth={0.45}
+                      strokeDasharray="1.5, 1"
+                    />
+                  )}
+                  <text
+                    x={el.transform.x}
+                    y={el.transform.y}
+                    fontFamily={el.style.fontFamily}
+                    fontSize={el.style.fontSize}
+                    fontWeight={el.style.fontWeight}
+                    fill={el.style.color}
+                    opacity={el.opacity}
+                    textAnchor="middle"
+                    dominantBaseline="central"
+                    style={{ userSelect: 'none' }}
+                  >
+                    {el.content}
+                  </text>
+                </g>
+              );
+            })}
           </g>
 
           {/* Crease / fold lines (1mm dash / 1mm gap in mm viewBox) */}
