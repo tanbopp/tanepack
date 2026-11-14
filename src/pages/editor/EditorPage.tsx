@@ -20,6 +20,7 @@ import { DEFAULT_TEXT_CONTENT, DielineStage, useEditorStore } from '@features/ed
 import { exportSvgElementToPngDataUrl, triggerPngDataUrlDownload } from '@shared/lib/exportPng';
 import { loadUploadedImageFile } from '@shared/lib/imageUpload';
 import { M3Button, M3CircularProgress, M3Icon, M3IconButton, M3TextField } from '@shared/ui';
+import { type CloudSaveStatus, useProjectPersistence } from './useProjectPersistence';
 
 type EditorRailToolId = 'templates' | 'text' | 'shapes' | 'upload';
 type EditorViewMode = '2d' | '3d';
@@ -39,12 +40,38 @@ const LEFT_RAIL_ITEMS: readonly EditorRailItem[] = [
 
 const TEXT_COMMIT_DEBOUNCE_MS = 350;
 
+const SAVE_STATUS_DISPLAY: Record<
+  CloudSaveStatus,
+  { label: string; icon: string; backgroundColor: string; color: string }
+> = {
+  saved: {
+    label: 'Saved',
+    icon: 'cloud_done',
+    backgroundColor: 'var(--md-sys-color-surface-container-high)',
+    color: 'var(--md-sys-color-on-surface-variant)',
+  },
+  saving: {
+    label: 'Saving...',
+    icon: 'sync',
+    backgroundColor: 'var(--md-sys-color-secondary-container)',
+    color: 'var(--md-sys-color-on-secondary-container)',
+  },
+  error: {
+    label: 'Error',
+    icon: 'cloud_off',
+    backgroundColor: 'var(--md-sys-color-error-container)',
+    color: 'var(--md-sys-color-on-error-container)',
+  },
+};
+
 const LazyBoxViewer = lazy(() =>
   import('@features/editor-3d').then((module) => ({ default: module.BoxViewer })),
 );
 
 export default function EditorPage() {
   const navigate = useNavigate();
+  const { projectName, saveStatus, statusErrorMessage } = useProjectPersistence();
+  const statusDisplay = SAVE_STATUS_DISPLAY[saveStatus];
   const [selectedTool, setSelectedTool] = useState<EditorRailToolId | null>(null);
   const [viewMode, setViewMode] = useState<EditorViewMode>('2d');
   const [isExporting, setIsExporting] = useState(false);
@@ -64,6 +91,7 @@ export default function EditorPage() {
   const removeElement = useEditorStore((state) => state.removeElement);
   const commitElements = useEditorStore((state) => state.commitElements);
   const setFoldAngle = useEditorStore((state) => state.setFoldAngle);
+  const resetEditorStore = useEditorStore((state) => state.reset);
 
   const selectedElement = elements.find((el) => el.id === selectedElementId) ?? null;
   const selectedFaceName = selectedElement
@@ -167,6 +195,12 @@ export default function EditorPage() {
     removeElement(selectedElement.id);
   };
 
+  const handleNavigateHome = () => {
+    clearCommitTimer();
+    resetEditorStore();
+    navigate('/');
+  };
+
   const handleExport = async () => {
     if (isExporting) {
       return;
@@ -240,12 +274,14 @@ export default function EditorPage() {
           }}
         >
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, minWidth: 0 }}>
-            <M3IconButton icon="arrow_back" label="Back to home" onClick={() => navigate('/')} />
+            <M3IconButton icon="arrow_back" label="Back to home" onClick={handleNavigateHome} />
             <Typography variant="titleMedium" component="h1" noWrap sx={{ fontWeight: 500 }}>
-              Untitled Box
+              {projectName}
             </Typography>
             <Box
-              aria-label="Save status: Saved"
+              data-testid="save-status-pill"
+              aria-label={`Save status: ${statusDisplay.label}`}
+              title={statusErrorMessage ?? undefined}
               sx={{
                 display: { xs: 'none', sm: 'inline-flex' },
                 alignItems: 'center',
@@ -253,13 +289,13 @@ export default function EditorPage() {
                 px: 1.25,
                 py: 0.375,
                 borderRadius: '9999px',
-                backgroundColor: 'var(--md-sys-color-surface-container-high)',
-                color: 'var(--md-sys-color-on-surface-variant)',
+                backgroundColor: statusDisplay.backgroundColor,
+                color: statusDisplay.color,
               }}
             >
-              <M3Icon name="cloud_done" size={16} />
+              <M3Icon name={statusDisplay.icon} size={16} />
               <Typography variant="labelMedium" component="span">
-                Saved
+                {statusDisplay.label}
               </Typography>
             </Box>
           </Box>

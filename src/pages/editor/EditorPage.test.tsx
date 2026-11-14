@@ -1,13 +1,38 @@
-// Unit tests for EditorPage M3 workspace, text tool, image upload, and PNG export
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+// Unit tests for EditorPage M3 workspace, artwork tools, PNG export, and cloud persistence
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { useEffect } from 'react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useEditorStore } from '@features/editor-stage';
-import type { DesignElement } from '@entities/design-document';
+import type { DesignElement, Project } from '@entities/design-document';
+import { generateTuckEndBox } from '@entities/dieline';
+import { isValidUuid } from '@shared/lib/id';
+import { GUEST_ID_STORAGE_KEY } from '@shared/lib/useGuestSession';
 import EditorPage from './EditorPage';
+import { resetProjectPersistenceTracking } from './useProjectPersistence';
 
 const MOCK_3D_PNG_DATA_URL = 'data:image/png;base64,MOCK3DSNAPSHOT';
+const TEST_PROJECT_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+
+const { mockFetchProject, mockSaveProject } = vi.hoisted(() => ({
+  mockFetchProject: vi.fn<(projectId: string) => Promise<Project | null>>(),
+  mockSaveProject:
+    vi.fn<(projectId: string, projectData: Project, userId: string) => Promise<Project>>(),
+}));
+
+vi.mock('@shared/lib/supabase', () => ({
+  createSupabaseClient: () => ({}),
+}));
+
+vi.mock('@entities/design-document', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@entities/design-document')>();
+  return {
+    ...actual,
+    fetchProject: mockFetchProject,
+    saveProject: mockSaveProject,
+  };
+});
 
 vi.mock('@features/editor-3d', () => ({
   BoxViewer: ({
@@ -46,14 +71,23 @@ vi.mock('@features/editor-3d', () => ({
   },
 }));
 
-function renderEditorPage() {
+function renderEditorPage(initialEntry = '/editor') {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+      mutations: { retry: false },
+    },
+  });
+
   return render(
-    <MemoryRouter
-      initialEntries={['/editor']}
-      future={{ v7_startTransition: true, v7_relativeSplatPath: true }}
-    >
-      <EditorPage />
-    </MemoryRouter>,
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter
+        initialEntries={[initialEntry]}
+        future={{ v7_startTransition: true, v7_relativeSplatPath: true }}
+      >
+        <EditorPage />
+      </MemoryRouter>
+    </QueryClientProvider>,
   );
 }
 
@@ -63,11 +97,20 @@ function getFirstCommittedContent(): string | null {
 }
 
 beforeEach(() => {
+  window.localStorage.clear();
+  resetProjectPersistenceTracking();
   useEditorStore.getState().reset();
+  mockFetchProject.mockReset();
+  mockFetchProject.mockResolvedValue(null);
+  mockSaveProject.mockReset();
+  mockSaveProject.mockImplementation(async (_projectId, projectData) => projectData);
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
+  window.localStorage.clear();
+  resetProjectPersistenceTracking();
   useEditorStore.getState().reset();
   cleanup();
 });
@@ -187,5 +230,142 @@ describe('EditorPage', () => {
     await waitFor(() => {
       expect(anchorClickSpy).toHaveBeenCalledTimes(1);
     });
+  });
+
+  it('hydrates Zustand store from Supabase project design_json when ?id= matches a saved row', async () => {
+    const savedDieline = generateTuckEndBox({
+      length: 120,
+      width: 60,
+      height: 110,
+      thickness: 0.5,
+      bleedSize: 3,
+    });
+    const savedElements: DesignElement[] = [
+      {
+        id: 'txt-loaded-1',
+        type: 'text',
+        faceId: 'front',
+        side: 'outside',
+        content: 'Loaded Mint Tea',
+        transform: { x: 100, y: 120, width: 60, height: 18, rotation: 0 },
+        opacity: 1,
+        zIndex: 1,
+        style: {
+          fontFamily: 'Google Sans, sans-serif',
+          fontSize: 14,
+          fontWeight: 700,
+          lineHeight: 1.2,
+          letterSpacing: 0,
+          textAlign: 'center',
+          color: '#1b1b1f',
+        },
+      },
+    ];
+    const remoteProject: Project = {
+      id: TEST_PROJECT_ID,
+      version: 1,
+      name: 'Mint Tea Box',
+      createdAt: '2026-11-14T10:00:00.000Z',
+      updatedAt: '2026-11-14T10:05:00.000Z',
+      dieline: savedDieline,
+      layers: { outside: savedElements, inside: [] },
+      metadata: { seedColor: '#7B5E3B' },
+    };
+    mockFetchProject.mockResolvedValue(remoteProject);
+
+    renderEditorPage(`/editor?id=${TEST_PROJECT_ID}`);
+
+    await waitFor(() => {
+      expect(mockFetchProject).toHaveBeenCalledWith(TEST_PROJECT_ID);
+      expect(screen.getByText('Mint Tea Box')).toBeTruthy();
+    });
+
+    const svg = screen.getByTestId('dieline-svg');
+    expect(svg.querySelector('[data-layer="artwork"] text')?.textContent).toBe('Loaded Mint Tea');
+    expect(useEditorStore.getState().dieline.dimensions.length).toBe(120);
+    expect(mockSaveProject).not.toHaveBeenCalled();
+  });
+
+  it('debounces auto-save by 2 seconds and transitions status pill from Saving... to Saved', async () => {
+    let resolveSave: ((value: Project) => void) | null = null;
+    mockSaveProject.mockImplementation(
+      () =>
+        new Promise<Project>((resolve) => {
+          resolveSave = resolve;
+        }),
+    );
+
+    renderEditorPage(`/editor?id=${TEST_PROJECT_ID}`);
+
+    await waitFor(() => {
+      expect(mockFetchProject).toHaveBeenCalledWith(TEST_PROJECT_ID);
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    vi.useFakeTimers();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add Text' }));
+    expect(mockSaveProject).not.toHaveBeenCalled();
+    expect(within(screen.getByTestId('save-status-pill')).getByText('Saved')).toBeTruthy();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1900);
+    });
+    expect(mockSaveProject).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(150);
+    });
+
+    expect(mockSaveProject).toHaveBeenCalledTimes(1);
+    const savedCall = mockSaveProject.mock.calls[0];
+    expect(savedCall?.[0]).toBe(TEST_PROJECT_ID);
+    expect(savedCall?.[1].name).toBe('Untitled Box');
+    expect(savedCall?.[1].layers.outside).toHaveLength(1);
+    expect(isValidUuid(savedCall?.[2])).toBe(true);
+    expect(savedCall?.[2]).toBe(window.localStorage.getItem(GUEST_ID_STORAGE_KEY));
+    expect(within(screen.getByTestId('save-status-pill')).getByText('Saving...')).toBeTruthy();
+    expect(screen.getByTestId('save-status-pill').getAttribute('aria-label')).toBe(
+      'Save status: Saving...',
+    );
+
+    await act(async () => {
+      if (savedCall) {
+        resolveSave?.(savedCall[1]);
+      }
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(within(screen.getByTestId('save-status-pill')).getByText('Saved')).toBeTruthy();
+  });
+
+  it('updates status pill to Error when saveProject fails', async () => {
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    mockSaveProject.mockRejectedValue(new Error('network timeout'));
+
+    renderEditorPage(`/editor?id=${TEST_PROJECT_ID}`);
+
+    await waitFor(() => {
+      expect(mockFetchProject).toHaveBeenCalledWith(TEST_PROJECT_ID);
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    vi.useFakeTimers();
+    fireEvent.click(screen.getByRole('button', { name: 'Add Text' }));
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2050);
+    });
+
+    expect(mockSaveProject).toHaveBeenCalledTimes(1);
+    expect(within(screen.getByTestId('save-status-pill')).getByText('Error')).toBeTruthy();
+    expect(screen.getByTestId('save-status-pill').getAttribute('aria-label')).toBe(
+      'Save status: Error',
+    );
+    expect(consoleErrorSpy).toHaveBeenCalled();
   });
 });
