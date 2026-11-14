@@ -1,0 +1,9 @@
+# Ignore dependencies, build outputs, local secrets, logs, and caches
+node_modules
+dist
+.env.local
+.env.*.local
+*.log
+.vite
+coverage
+.DS_Store

@@ -1,0 +1,2 @@
+# Git pre-commit hook running lint-staged checks
+pnpm lint-staged
