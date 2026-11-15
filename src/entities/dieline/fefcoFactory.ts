@@ -671,10 +671,16 @@ export function generateFefcoBox(config: FefcoConfig, dimensions: Dieline['dimen
     const faceId = `${side}-flap-${col.id}`;
     const polyPts = geom.facePolygons[0]?.points ?? geom.cutContour;
     const facePtsMm = mapFlapPointsToMm(polyPts, col.x0, col.width, hingeY, dir);
+    const holePaths: string[] = [];
+    for (const hole of geom.holes) {
+      const holeMm = mapFlapPointsToMm(hole, col.x0, col.width, hingeY, dir);
+      holePaths.push(buildClosedSvgPolygon(holeMm));
+    }
+    const facePath = [buildClosedSvgPolygon(facePtsMm), ...holePaths].join(' ');
     faces.push({
       id: faceId,
       name: `${side === 'top' ? 'Top' : 'Bottom'} ${col.name} Flap`,
-      path: buildClosedSvgPolygon(facePtsMm),
+      path: facePath,
       folds: [hingeFoldId, ...articulatedFolds],
       adjacentFaces: wrapPivotFoldId ? [] : [col.id],
     });
@@ -693,7 +699,10 @@ export function generateFefcoBox(config: FefcoConfig, dimensions: Dieline['dimen
       resolvedTier = geom.layerOffsetTier;
     } else if (side === 'bottom') {
       foldStage = wrapPivotFoldId ? [60, 75] : [0, 30];
-      if (PLANAR_SLOTTED_PRESETS.has(bottomPreset)) {
+      if (wrapPivotFoldId) {
+        resolvedLayerOrder = 2;
+        resolvedTier = 2.0;
+      } else if (PLANAR_SLOTTED_PRESETS.has(bottomPreset)) {
         if (col.basis === 'L') {
           resolvedLayerOrder = 1;
           resolvedTier = (botOverlap.outerOverlaps ? 1 : 0) + (col.id === 'back-right' ? 0.4 : 0);
@@ -758,7 +767,7 @@ export function generateFefcoBox(config: FefcoConfig, dimensions: Dieline['dimen
       animatedAngleRange: geom.animatedAngleRange ?? [0, 90],
       foldStage,
       layerOrder: resolvedLayerOrder,
-      layerOffsetDirection: side === 'top' ? -1 : 1,
+      layerOffsetDirection: wrapPivotFoldId ? -1 : side === 'top' ? -1 : 1,
       ...(resolvedTier !== undefined ? { layerOffsetTier: resolvedTier } : {}),
       ...(geom.tongueLayerOrder !== undefined ? { tongueLayerOrder: geom.tongueLayerOrder } : {}),
       ...(geom.tongueLayerOffsetMm !== undefined

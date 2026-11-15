@@ -98,6 +98,8 @@ export function parseSvgPathToShape(
 ): { shape: THREE.Shape; boundsMm: FaceBoundsMm } {
   const tokens = tokenizeSvgPath(path);
   const shape = new THREE.Shape();
+  let currentTarget: THREE.Path = shape;
+  let isFirstSubpath = true;
 
   let index = 0;
   let cmd = '';
@@ -111,7 +113,7 @@ export function parseSvgPathToShape(
   let maxX = -Infinity;
   let maxY = -Infinity;
 
-  const trackPoint = (x: number, y: number) => {
+  const trackOuterPoint = (x: number, y: number) => {
     if (x < minX) minX = x;
     if (y < minY) minY = y;
     if (x > maxX) maxX = x;
@@ -142,7 +144,7 @@ export function parseSvgPathToShape(
       index += 1;
 
       if (cmd === 'Z' || cmd === 'z') {
-        shape.closePath();
+        currentTarget.closePath();
         curX = startX;
         curY = startY;
       }
@@ -158,8 +160,18 @@ export function parseSvgPathToShape(
         curY = cmd === 'm' ? curY + rawY : rawY;
         startX = curX;
         startY = curY;
-        trackPoint(curX, curY);
-        shape.moveTo(toShapeU(curX), toShapeV(curY));
+
+        if (isFirstSubpath) {
+          isFirstSubpath = false;
+          currentTarget = shape;
+          trackOuterPoint(curX, curY);
+        } else {
+          const hole = new THREE.Path();
+          shape.holes.push(hole);
+          currentTarget = hole;
+        }
+
+        currentTarget.moveTo(toShapeU(curX), toShapeV(curY));
         // SVG treats subsequent coordinate pairs after M/m as L/l
         cmd = cmd === 'm' ? 'l' : 'L';
         break;
@@ -170,8 +182,10 @@ export function parseSvgPathToShape(
         const rawY = nextNum();
         curX = cmd === 'l' ? curX + rawX : rawX;
         curY = cmd === 'l' ? curY + rawY : rawY;
-        trackPoint(curX, curY);
-        shape.lineTo(toShapeU(curX), toShapeV(curY));
+        if (currentTarget === shape) {
+          trackOuterPoint(curX, curY);
+        }
+        currentTarget.lineTo(toShapeU(curX), toShapeV(curY));
         break;
       }
       case 'Q':
@@ -184,9 +198,11 @@ export function parseSvgPathToShape(
         const cy = cmd === 'q' ? curY + rawCy : rawCy;
         curX = cmd === 'q' ? curX + rawX : rawX;
         curY = cmd === 'q' ? curY + rawY : rawY;
-        trackPoint(cx, cy);
-        trackPoint(curX, curY);
-        shape.quadraticCurveTo(toShapeU(cx), toShapeV(cy), toShapeU(curX), toShapeV(curY));
+        if (currentTarget === shape) {
+          trackOuterPoint(cx, cy);
+          trackOuterPoint(curX, curY);
+        }
+        currentTarget.quadraticCurveTo(toShapeU(cx), toShapeV(cy), toShapeU(curX), toShapeV(curY));
         break;
       }
       case 'C':
@@ -203,10 +219,12 @@ export function parseSvgPathToShape(
         const c2y = cmd === 'c' ? curY + rawC2y : rawC2y;
         curX = cmd === 'c' ? curX + rawX : rawX;
         curY = cmd === 'c' ? curY + rawY : rawY;
-        trackPoint(c1x, c1y);
-        trackPoint(c2x, c2y);
-        trackPoint(curX, curY);
-        shape.bezierCurveTo(
+        if (currentTarget === shape) {
+          trackOuterPoint(c1x, c1y);
+          trackOuterPoint(c2x, c2y);
+          trackOuterPoint(curX, curY);
+        }
+        currentTarget.bezierCurveTo(
           toShapeU(c1x),
           toShapeV(c1y),
           toShapeU(c2x),
@@ -394,7 +412,7 @@ function buildGeometryPartFromShape(
   uvBoundsMm: FaceBoundsMm,
   layerOrder: number,
 ): KinematicFacePart {
-  const geometry = new THREE.ShapeGeometry(shape, 8);
+  const geometry = new THREE.ShapeGeometry(shape, 24);
   geometry.rotateX(-Math.PI / 2);
   applyNormalizedFaceUvs(geometry, pivotMm, uvBoundsMm);
   geometry.computeVertexNormals();
@@ -438,10 +456,22 @@ function createFaceGeometryPart(
   );
 }
 
-/** Sample face SVG path vertices in raw 2D millimeter coordinates (preserving Q curve detail). */
+/** Extracts any subsequent hole subpaths (M...Z) beyond the first outer boundary subpath. */
+function extractHoleSvgSubpaths(path: string): string[] {
+  const subpaths = path.match(/[Mm][^Mm]*/g);
+  if (!subpaths || subpaths.length <= 1) {
+    return [];
+  }
+  return subpaths
+    .slice(1)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
+
+/** Sample face SVG path vertices in raw 2D millimeter coordinates (preserving Q and C curve detail). */
 function sampleFacePolygonMm(facePath: string): Point[] {
   const { shape } = parseSvgPathToShape(facePath, { x: 0, y: 0 });
-  const rawPoints = shape.getPoints(8);
+  const rawPoints = shape.getPoints(24);
   return rawPoints.map((vec) => ({
     x: vec.x / DIELINE_SCALE_TO_3D,
     y: -vec.y / DIELINE_SCALE_TO_3D,
@@ -625,6 +655,24 @@ export function buildBoxGeometry(dieline: Dieline): KinematicBoxModel {
     }
 
     const lidShapeData = createShapeFromMmPolygon(lidPoly, pivotMm);
+    const tonguePivotMm = midpoint(internalHorizontalFold.from, internalHorizontalFold.to);
+    const tongueShapeData = createShapeFromMmPolygon(tonguePoly, tonguePivotMm);
+
+    // Distribute any cutout holes in face.path to lid or tongue part based on split fold line
+    const holeSubpaths = extractHoleSvgSubpaths(face.path);
+    for (const holeSvg of holeSubpaths) {
+      const holeParsed = parseSvgPathToShape(holeSvg, { x: 0, y: 0 });
+      const holeCenterY = holeParsed.boundsMm.center.y;
+      const isHoleOnTongue = keepLidBelow ? holeCenterY > splitY : holeCenterY < splitY;
+      if (isHoleOnTongue) {
+        const tongueHole = parseSvgPathToShape(holeSvg, tonguePivotMm);
+        tongueShapeData.shape.holes.push(tongueHole.shape);
+      } else {
+        const lidHole = parseSvgPathToShape(holeSvg, pivotMm);
+        lidShapeData.shape.holes.push(lidHole.shape);
+      }
+    }
+
     const lidPart = buildGeometryPartFromShape(
       face.id,
       face.id,
@@ -636,8 +684,6 @@ export function buildBoxGeometry(dieline: Dieline): KinematicBoxModel {
       lidLayerOrder,
     );
 
-    const tonguePivotMm = midpoint(internalHorizontalFold.from, internalHorizontalFold.to);
-    const tongueShapeData = createShapeFromMmPolygon(tonguePoly, tonguePivotMm);
     const tonguePart = buildGeometryPartFromShape(
       `${face.id}-tongue`,
       face.id,

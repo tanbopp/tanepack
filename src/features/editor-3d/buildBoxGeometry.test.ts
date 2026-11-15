@@ -92,6 +92,20 @@ describe('buildBoxGeometry', () => {
     expect(shape.getPoints(4).length).toBeGreaterThan(4);
   });
 
+  it('parses multi-subpath SVG paths detecting subsequent M...Z as holes in THREE.Shape', () => {
+    const { shape, boundsMm } = parseSvgPathToShape(
+      'M 0 0 L 10 0 L 10 10 L 0 10 Z M 2 2 L 8 2 L 8 8 L 2 8 Z',
+      { x: 5, y: 5 },
+    );
+
+    expect(boundsMm.minX).toBe(0);
+    expect(boundsMm.maxX).toBe(10);
+    expect(boundsMm.minY).toBe(0);
+    expect(boundsMm.maxY).toBe(10);
+    expect(shape.holes).toHaveLength(1);
+    expect(shape.holes[0]?.curves.length).toBeGreaterThan(0);
+  });
+
   it('constructs the full 11-face hierarchical kinematic tree scaled by 0.01', () => {
     const dieline = generateTuckEndBox(SAMPLE_DIMENSIONS);
     const model = buildBoxGeometry(dieline);
@@ -679,5 +693,50 @@ describe('buildBoxGeometry', () => {
     expect(closed0225.get('bottom-flap-left')!.max.y).toBeGreaterThan(0.5);
     expect(closed0225.get('bottom-flap-right')!.max.y).toBeGreaterThan(0.5);
     m0225.dispose();
+
+    // Verify 3D hole presence across handles, Euroslots, and latch cutouts
+    const d0240 = generateDieline('fefco-0240', dims);
+    const m0240Holes = buildBoxGeometry(d0240);
+    const headerNode240 = findNode(m0240Holes.root, 'group-top-flap-back')!;
+    const headerFace240 = headerNode240.faces.find((f) => f.faceId === 'top-flap-back')!;
+    // 2 Euroslot holes in header
+    expect(
+      parseSvgPathToShape(d0240.faces.find((f) => f.id === 'top-flap-back')!.path, { x: 0, y: 0 })
+        .shape.holes,
+    ).toHaveLength(2);
+    expect(headerFace240.edgeGeometry.attributes.position?.count).toBeGreaterThan(20);
+    m0240Holes.dispose();
+
+    const d0241 = generateDieline('fefco-0241', dims);
+    const m0241Holes = buildBoxGeometry(d0241);
+    const wingNode241 = findNode(m0241Holes.root, 'group-top-flap-left-tongue')!;
+    const wingPart241 = wingNode241.faces.find((f) => f.faceId === 'top-flap-left-tongue')!;
+    expect(wingPart241.edgeGeometry.attributes.position?.count).toBeGreaterThan(20);
+    m0241Holes.dispose();
+
+    const d0222 = generateDieline('fefco-0222', {
+      length: 180,
+      width: 90,
+      height: 150,
+      thickness: 0.5,
+      bleedSize: 3,
+    });
+    const m0222Holes = buildBoxGeometry(d0222);
+    const handleNode222 = findNode(m0222Holes.root, 'group-top-flap-front-tongue')!;
+    const handlePart222 = handleNode222.faces.find((f) => f.faceId === 'top-flap-front-tongue')!;
+    expect(handlePart222.edgeGeometry.attributes.position?.count).toBeGreaterThan(16);
+    m0222Holes.dispose();
+
+    const d0219 = generateDieline('fefco-0219', dims);
+    const m0219Holes = buildBoxGeometry(d0219);
+    const backLid219 = findNode(m0219Holes.root, 'group-top-flap-back')!;
+    const backPart219 = backLid219.faces.find((f) => f.faceId === 'top-flap-back')!;
+    // Butterfly handle cutout
+    expect(backPart219.edgeGeometry.attributes.position?.count).toBeGreaterThan(20);
+    const frontLid219 = findNode(m0219Holes.root, 'group-top-flap-front')!;
+    const frontPart219 = frontLid219.faces.find((f) => f.faceId === 'top-flap-front')!;
+    // Twin circular finger holes
+    expect(frontPart219.edgeGeometry.attributes.position?.count).toBeGreaterThan(20);
+    m0219Holes.dispose();
   });
 });
