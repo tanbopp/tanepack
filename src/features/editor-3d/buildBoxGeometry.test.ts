@@ -275,4 +275,43 @@ describe('buildBoxGeometry', () => {
     expect(bytes[centerOffset + 3]).toBeGreaterThan(40);
     texture.dispose();
   });
+
+  it('rebuilds scaled 3D geometry and valid closed 90° bounds when dimensions change (150x50x100 & 200x150x100)', () => {
+    const elongatedDieline = generateTuckEndBox({
+      length: 150,
+      width: 50,
+      height: 100,
+      thickness: 0.5,
+      bleedSize: 3,
+    });
+    const elongatedModel = buildBoxGeometry(elongatedDieline);
+    expect(elongatedModel.shadowExtent.width).toBeCloseTo(417 * DIELINE_SCALE_TO_3D, 6);
+
+    const foldedElongated = computeFaceWorldBounds(elongatedModel.root, 90);
+    const frontSize = new THREE.Vector3();
+    foldedElongated.get('front')!.getSize(frontSize);
+    expect(frontSize.x).toBeCloseTo(150.5 * DIELINE_SCALE_TO_3D, 3);
+    expect(frontSize.z).toBeCloseTo(100.5 * DIELINE_SCALE_TO_3D, 3);
+
+    const leftWall = foldedElongated.get('left')!;
+    const rightWall = foldedElongated.get('right')!;
+    const frontWall = foldedElongated.get('front')!;
+    expect(leftWall.min.x).toBeCloseTo(frontWall.min.x, 3);
+    expect(rightWall.max.x).toBeCloseTo(frontWall.max.x, 3);
+    elongatedModel.dispose();
+
+    const largeDieline = generateTuckEndBox({
+      length: 200,
+      width: 150,
+      height: 100,
+      thickness: 0.5,
+      bleedSize: 3,
+    });
+    const largeModel = buildBoxGeometry(largeDieline);
+    const foldedLarge = computeFaceWorldBounds(largeModel.root, 90);
+    const largeRightSize = new THREE.Vector3();
+    foldedLarge.get('right')!.getSize(largeRightSize);
+    expect(largeRightSize.y).toBeCloseTo(150.5 * DIELINE_SCALE_TO_3D, 3);
+    largeModel.dispose();
+  });
 });

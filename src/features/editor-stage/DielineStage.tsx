@@ -176,6 +176,7 @@ function SelectionTransformOverlay({
 export function DielineStage({ dimensions }: DielineStageProps) {
   const stageRef = useRef<HTMLDivElement | null>(null);
   const hasAutoFittedRef = useRef(false);
+  const lastAutoFittedSizeRef = useRef<{ totalWidth: number; totalHeight: number } | null>(null);
   const dragOriginRef = useRef<{ clientX: number; clientY: number; pan: Point } | null>(null);
   const activeInteractionRef = useRef<ActiveTransformInteraction | null>(null);
   const viewportRef = useRef<StageViewport>({ zoom: 1, pan: { x: 0, y: 0 } });
@@ -305,6 +306,10 @@ export function DielineStage({ dimensions }: DielineStageProps) {
       const { width, height } = entry.contentRect;
       if (width > 0 && height > 0) {
         hasAutoFittedRef.current = true;
+        lastAutoFittedSizeRef.current = {
+          totalWidth: dieline.totalWidth,
+          totalHeight: dieline.totalHeight,
+        };
         setViewport(
           computeFitViewport(
             { width, height },
@@ -318,7 +323,59 @@ export function DielineStage({ dimensions }: DielineStageProps) {
 
     observer.observe(stageEl);
     return () => observer.disconnect();
-  }, [baseHeightPx, baseWidthPx, sheetHeightPx, sheetWidthPx]);
+  }, [
+    baseHeightPx,
+    baseWidthPx,
+    dieline.totalHeight,
+    dieline.totalWidth,
+    sheetHeightPx,
+    sheetWidthPx,
+  ]);
+
+  // Auto-fit viewport whenever parametric dieline dimensions change after initial mount
+  useEffect(() => {
+    const prev = lastAutoFittedSizeRef.current;
+    if (prev === null) {
+      lastAutoFittedSizeRef.current = {
+        totalWidth: dieline.totalWidth,
+        totalHeight: dieline.totalHeight,
+      };
+      return;
+    }
+    if (prev.totalWidth === dieline.totalWidth && prev.totalHeight === dieline.totalHeight) {
+      return;
+    }
+
+    lastAutoFittedSizeRef.current = {
+      totalWidth: dieline.totalWidth,
+      totalHeight: dieline.totalHeight,
+    };
+
+    const stageEl = stageRef.current;
+    if (!stageEl) {
+      return;
+    }
+    const rect = stageEl.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) {
+      return;
+    }
+
+    hasAutoFittedRef.current = true;
+    setViewport(
+      computeFitViewport(
+        { width: rect.width, height: rect.height },
+        { width: sheetWidthPx, height: sheetHeightPx },
+        { width: baseWidthPx, height: baseHeightPx },
+      ),
+    );
+  }, [
+    baseHeightPx,
+    baseWidthPx,
+    dieline.totalHeight,
+    dieline.totalWidth,
+    sheetHeightPx,
+    sheetWidthPx,
+  ]);
 
   // Track Spacebar hold globally while avoiding conflict with focused form controls
   useEffect(() => {

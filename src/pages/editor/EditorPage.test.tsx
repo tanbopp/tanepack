@@ -6,7 +6,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useEditorStore } from '@features/editor-stage';
 import type { DesignElement, Project } from '@entities/design-document';
-import { generateTuckEndBox } from '@entities/dieline';
+import { type Dieline, generateTuckEndBox } from '@entities/dieline';
 import { isValidUuid } from '@shared/lib/id';
 import { GUEST_ID_STORAGE_KEY } from '@shared/lib/useGuestSession';
 import EditorPage from './EditorPage';
@@ -36,10 +36,12 @@ vi.mock('@entities/design-document', async (importOriginal) => {
 
 vi.mock('@features/editor-3d', () => ({
   BoxViewer: ({
+    dieline,
     foldAngle = 0,
     elements = [],
     onRegisterCapture,
   }: {
+    dieline?: Dieline | undefined;
     foldAngle?: number;
     elements?: readonly DesignElement[];
     onRegisterCapture?: ((captureFn: (() => string | null) | null) => void) | undefined;
@@ -60,6 +62,8 @@ vi.mock('@features/editor-3d', () => ({
     return (
       <div
         data-testid="box-viewer-3d"
+        data-dieline-length={dieline ? String(dieline.dimensions.length) : ''}
+        data-dieline-total-width={dieline ? String(dieline.totalWidth) : ''}
         data-fold-angle={String(foldAngle)}
         data-committed-count={String(elements.length)}
         data-committed-text={joinedText}
@@ -401,5 +405,61 @@ describe('EditorPage', () => {
     fireEvent.change(renameInput, { target: { value: 'Tea Gift Carton' } });
     fireEvent.keyDown(renameInput, { key: 'Enter', code: 'Enter' });
     expect(screen.getByText('Tea Gift Carton')).toBeTruthy();
+  });
+
+  it('shows Box Dimensions controls when unselected, debounces L/W/H edits by 300ms, supports presets, and updates 2D & 3D', async () => {
+    renderEditorPage(`/editor?id=${TEST_PROJECT_ID}`);
+
+    await waitFor(() => {
+      expect(mockFetchProject).toHaveBeenCalledWith(TEST_PROJECT_ID);
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.getByTestId('box-dimensions-panel')).toBeTruthy();
+    const lengthInput = screen.getByLabelText('Length') as HTMLInputElement;
+    expect(lengthInput.value).toBe('100');
+
+    // Preset selection applies immediately
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Preset' }));
+    fireEvent.click(screen.getByRole('option', { name: 'Large: 200x150x100' }));
+    expect(useEditorStore.getState().dimensions).toMatchObject({
+      length: 200,
+      width: 150,
+      height: 100,
+    });
+    expect(screen.getByTestId('dieline-svg').getAttribute('viewBox')).toBe('0 0 722 441.5');
+
+    // Return to Standard preset and test 300ms debounced Length change (100 -> 150)
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Preset' }));
+    fireEvent.click(screen.getByRole('option', { name: 'Standard: 100x50x100' }));
+
+    vi.useFakeTimers();
+    fireEvent.change(lengthInput, { target: { value: '150' } });
+    expect(useEditorStore.getState().dimensions.length).toBe(100);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(250);
+    });
+    expect(useEditorStore.getState().dimensions.length).toBe(100);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60);
+    });
+    expect(useEditorStore.getState().dimensions.length).toBe(150);
+    expect(screen.getByTestId('dieline-svg').getAttribute('viewBox')).toBe('0 0 417 231.5');
+    expect(screen.getByTestId('box-dimensions-summary').textContent).toBe('150 × 50 × 100 mm');
+
+    // Switch to 3D Preview and confirm updated dieline dimensions reach BoxViewer
+    vi.useRealTimers();
+    fireEvent.click(screen.getByRole('button', { name: '3D Preview' }));
+    await waitFor(() => {
+      expect(screen.getByTestId('box-viewer-3d')).toBeTruthy();
+    });
+    expect(screen.getByTestId('box-viewer-3d').getAttribute('data-dieline-length')).toBe('150');
+    expect(screen.getByTestId('box-viewer-3d').getAttribute('data-dieline-total-width')).toBe(
+      '417',
+    );
   });
 });

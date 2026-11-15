@@ -3,6 +3,7 @@ import AppBar from '@mui/material/AppBar';
 import Box from '@mui/material/Box';
 import Divider from '@mui/material/Divider';
 import FormControl from '@mui/material/FormControl';
+import InputAdornment from '@mui/material/InputAdornment';
 import InputLabel from '@mui/material/InputLabel';
 import MenuItem from '@mui/material/MenuItem';
 import Select, { type SelectChangeEvent } from '@mui/material/Select';
@@ -21,10 +22,13 @@ import {
 } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
+  clampBoxDimensionMm,
   computeTextFontSizePatch,
   DEFAULT_TEXT_CONTENT,
   DielineStage,
+  MAX_BOX_DIMENSION_MM,
   MAX_TEXT_FONT_SIZE_MM,
+  MIN_BOX_DIMENSION_MM,
   MIN_TEXT_FONT_SIZE_MM,
   useEditorStore,
 } from '@features/editor-stage';
@@ -50,6 +54,31 @@ const LEFT_RAIL_ITEMS: readonly EditorRailItem[] = [
 ];
 
 const TEXT_COMMIT_DEBOUNCE_MS = 350;
+const DIMENSION_COMMIT_DEBOUNCE_MS = 300;
+
+type BoxDimensionAxis = 'length' | 'width' | 'height';
+type BoxPresetId = 'small' | 'standard' | 'large';
+
+interface BoxDimensionPreset {
+  id: BoxPresetId;
+  label: string;
+  length: number;
+  width: number;
+  height: number;
+}
+
+interface DimensionDraftState {
+  sourceKey: string;
+  length: string;
+  width: string;
+  height: string;
+}
+
+const BOX_DIMENSION_PRESETS: readonly BoxDimensionPreset[] = [
+  { id: 'small', label: 'Small Box: 50x50x50', length: 50, width: 50, height: 50 },
+  { id: 'standard', label: 'Standard: 100x50x100', length: 100, width: 50, height: 100 },
+  { id: 'large', label: 'Large: 200x150x100', length: 200, width: 150, height: 100 },
+];
 
 const SAVE_STATUS_DISPLAY: Record<
   CloudSaveStatus,
@@ -89,12 +118,16 @@ export default function EditorPage() {
   const [isExporting, setIsExporting] = useState(false);
   const [isEditingName, setIsEditingName] = useState(false);
   const [draftProjectName, setDraftProjectName] = useState(projectName);
+  const [dimensionDraft, setDimensionDraft] = useState<DimensionDraftState | null>(null);
 
   const commitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const dimensionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingDimensionDraftRef = useRef<DimensionDraftState | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const capture3dPngRef = useRef<(() => string | null) | null>(null);
 
   const dieline = useEditorStore((state) => state.dieline);
+  const dimensions = useEditorStore((state) => state.dimensions);
   const elements = useEditorStore((state) => state.elements);
   const committedElements = useEditorStore((state) => state.committedElements);
   const selectedElementId = useEditorStore((state) => state.selectedElementId);
@@ -105,7 +138,28 @@ export default function EditorPage() {
   const removeElement = useEditorStore((state) => state.removeElement);
   const commitElements = useEditorStore((state) => state.commitElements);
   const setFoldAngle = useEditorStore((state) => state.setFoldAngle);
+  const setDimensions = useEditorStore((state) => state.setDimensions);
   const resetEditorStore = useEditorStore((state) => state.reset);
+
+  const storeDimensionsKey = `${dimensions.length}|${dimensions.width}|${dimensions.height}`;
+  const activeDimensionDraft =
+    dimensionDraft && dimensionDraft.sourceKey === storeDimensionsKey ? dimensionDraft : null;
+  const lengthInputValue = activeDimensionDraft
+    ? activeDimensionDraft.length
+    : String(dimensions.length);
+  const widthInputValue = activeDimensionDraft
+    ? activeDimensionDraft.width
+    : String(dimensions.width);
+  const heightInputValue = activeDimensionDraft
+    ? activeDimensionDraft.height
+    : String(dimensions.height);
+  const matchingPreset = BOX_DIMENSION_PRESETS.find(
+    (preset) =>
+      preset.length === dimensions.length &&
+      preset.width === dimensions.width &&
+      preset.height === dimensions.height,
+  );
+  const activePresetValue = matchingPreset?.id ?? 'custom';
 
   const selectedElement = elements.find((el) => el.id === selectedElementId) ?? null;
   const selectedFaceName = selectedElement
@@ -120,13 +174,103 @@ export default function EditorPage() {
     }
   };
 
+  const clearDimensionTimer = () => {
+    if (dimensionTimerRef.current !== null) {
+      clearTimeout(dimensionTimerRef.current);
+      dimensionTimerRef.current = null;
+    }
+  };
+
   useEffect(() => {
     return () => {
       if (commitTimerRef.current !== null) {
         clearTimeout(commitTimerRef.current);
       }
+      if (dimensionTimerRef.current !== null) {
+        clearTimeout(dimensionTimerRef.current);
+      }
     };
   }, []);
+
+  const commitDraftDimensions = (
+    draft: DimensionDraftState | null,
+    resetInvalidDraft = false,
+  ): void => {
+    if (!draft) {
+      return;
+    }
+    const current = useEditorStore.getState().dimensions;
+    const parseAxis = (raw: string, fallback: number): number | null => {
+      const trimmed = raw.trim();
+      if (trimmed.length === 0) {
+        return resetInvalidDraft ? fallback : null;
+      }
+      const parsed = Number(trimmed);
+      if (!Number.isFinite(parsed) || parsed <= 0) {
+        return resetInvalidDraft ? fallback : null;
+      }
+      return clampBoxDimensionMm(parsed, fallback);
+    };
+
+    const nextLength = parseAxis(draft.length, current.length);
+    const nextWidth = parseAxis(draft.width, current.width);
+    const nextHeight = parseAxis(draft.height, current.height);
+
+    if (nextLength === null || nextWidth === null || nextHeight === null) {
+      if (resetInvalidDraft) {
+        pendingDimensionDraftRef.current = null;
+        setDimensionDraft(null);
+      }
+      return;
+    }
+
+    pendingDimensionDraftRef.current = null;
+    setDimensionDraft(null);
+    setDimensions(nextLength, nextWidth, nextHeight);
+  };
+
+  const flushPendingDimensionDraft = () => {
+    clearDimensionTimer();
+    commitDraftDimensions(pendingDimensionDraftRef.current, true);
+  };
+
+  const handleDimensionInputChange = (axis: BoxDimensionAxis, nextValue: string) => {
+    const baseDraft: DimensionDraftState = activeDimensionDraft ?? {
+      sourceKey: storeDimensionsKey,
+      length: String(dimensions.length),
+      width: String(dimensions.width),
+      height: String(dimensions.height),
+    };
+    const nextDraft: DimensionDraftState = {
+      ...baseDraft,
+      [axis]: nextValue,
+    };
+
+    setDimensionDraft(nextDraft);
+    pendingDimensionDraftRef.current = nextDraft;
+    clearDimensionTimer();
+    dimensionTimerRef.current = setTimeout(() => {
+      dimensionTimerRef.current = null;
+      commitDraftDimensions(pendingDimensionDraftRef.current, false);
+    }, DIMENSION_COMMIT_DEBOUNCE_MS);
+  };
+
+  const handleDimensionKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === 'Enter') {
+      flushPendingDimensionDraft();
+    }
+  };
+
+  const handleDimensionPresetChange = (event: SelectChangeEvent<string>) => {
+    const selectedPreset = BOX_DIMENSION_PRESETS.find((preset) => preset.id === event.target.value);
+    if (!selectedPreset) {
+      return;
+    }
+    clearDimensionTimer();
+    pendingDimensionDraftRef.current = null;
+    setDimensionDraft(null);
+    setDimensions(selectedPreset.length, selectedPreset.width, selectedPreset.height);
+  };
 
   const handleRegister3dCapture = useCallback((captureFn: (() => string | null) | null) => {
     capture3dPngRef.current = captureFn;
@@ -172,6 +316,7 @@ export default function EditorPage() {
 
   const handleSwitchViewMode = (mode: EditorViewMode) => {
     if (mode === '3d') {
+      flushPendingDimensionDraft();
       clearCommitTimer();
       commitElements();
     }
@@ -262,6 +407,7 @@ export default function EditorPage() {
   };
 
   const handleNavigateBack = async () => {
+    flushPendingDimensionDraft();
     clearCommitTimer();
     commitElements();
     await flushPendingSave();
@@ -603,6 +749,7 @@ export default function EditorPage() {
           sx={{
             width: { xs: 240, md: 300 },
             flexShrink: 0,
+            overflowX: 'hidden',
             overflowY: 'auto',
             display: 'flex',
             flexDirection: 'column',
@@ -952,16 +1099,100 @@ export default function EditorPage() {
             </Box>
           ) : (
             <Box
+              data-testid="box-dimensions-panel"
               sx={{
-                flex: 1,
                 display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                textAlign: 'center',
-                px: 1,
+                flexDirection: 'column',
+                gap: 2,
               }}
             >
-              <Typography variant="bodyMedium" color="text.secondary">
+              <Box
+                sx={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 1,
+                }}
+              >
+                <Typography variant="titleSmall" component="h2" color="text.primary">
+                  Box Dimensions
+                </Typography>
+                <Typography
+                  variant="labelSmall"
+                  component="span"
+                  data-testid="box-dimensions-summary"
+                  sx={{
+                    px: 1,
+                    py: 0.25,
+                    borderRadius: '9999px',
+                    fontVariantNumeric: 'tabular-nums',
+                    backgroundColor: 'var(--md-sys-color-surface-container-high)',
+                    color: 'var(--md-sys-color-on-surface-variant)',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {dimensions.length} × {dimensions.width} × {dimensions.height} mm
+                </Typography>
+              </Box>
+
+              <FormControl size="small" fullWidth>
+                <InputLabel id="box-preset-select-label">Preset</InputLabel>
+                <Select<string>
+                  labelId="box-preset-select-label"
+                  id="box-preset-select"
+                  label="Preset"
+                  value={activePresetValue}
+                  onChange={handleDimensionPresetChange}
+                  sx={{
+                    borderRadius: '12px',
+                    backgroundColor: 'var(--md-sys-color-surface-container-highest)',
+                  }}
+                >
+                  {BOX_DIMENSION_PRESETS.map((preset) => (
+                    <MenuItem key={preset.id} value={preset.id}>
+                      {preset.label}
+                    </MenuItem>
+                  ))}
+                  <MenuItem value="custom" disabled>
+                    Custom
+                  </MenuItem>
+                </Select>
+              </FormControl>
+
+              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+                {(
+                  [
+                    { axis: 'length', label: 'Length', value: lengthInputValue },
+                    { axis: 'width', label: 'Width', value: widthInputValue },
+                    { axis: 'height', label: 'Height', value: heightInputValue },
+                  ] as const
+                ).map((field) => (
+                  <M3TextField
+                    key={field.axis}
+                    id={`box-dimension-${field.axis}`}
+                    label={field.label}
+                    type="number"
+                    value={field.value}
+                    onChange={(event) => handleDimensionInputChange(field.axis, event.target.value)}
+                    onBlur={flushPendingDimensionDraft}
+                    onKeyDown={handleDimensionKeyDown}
+                    slotProps={{
+                      input: {
+                        endAdornment: <InputAdornment position="end">mm</InputAdornment>,
+                      },
+                      htmlInput: {
+                        min: MIN_BOX_DIMENSION_MM,
+                        max: MAX_BOX_DIMENSION_MM,
+                        step: 1,
+                      },
+                    }}
+                  />
+                ))}
+              </Box>
+
+              <Divider />
+
+              <Typography variant="bodySmall" color="text.secondary" sx={{ lineHeight: 1.5 }}>
                 Click &ldquo;Add Text&rdquo; or &ldquo;Upload&rdquo; in the left rail, or select an
                 element on the dieline to edit artwork.
               </Typography>

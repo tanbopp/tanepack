@@ -6,8 +6,10 @@ import {
   type Dieline,
   generateTuckEndBox,
   roundMm,
+  type SvgPathBoundsMm,
 } from '@entities/dieline';
 import { createEntityId } from '@shared/lib/id';
+import { clampElementPositionToFace } from './viewport';
 
 export const DEFAULT_DIELINE_DIMENSIONS: Dieline['dimensions'] = {
   length: 100,
@@ -19,6 +21,16 @@ export const DEFAULT_DIELINE_DIMENSIONS: Dieline['dimensions'] = {
 
 export const DEFAULT_TEXT_CONTENT = 'Tanepack';
 export const DEFAULT_IMAGE_SIZE_MM = 30;
+export const MIN_BOX_DIMENSION_MM = 10;
+export const MAX_BOX_DIMENSION_MM = 2000;
+
+/** Clamps a user-entered millimeter box dimension safely into [10, 2000]. */
+export function clampBoxDimensionMm(value: number, fallback: number): number {
+  if (!Number.isFinite(value) || value <= 0) {
+    return fallback;
+  }
+  return roundMm(Math.min(MAX_BOX_DIMENSION_MM, Math.max(MIN_BOX_DIMENSION_MM, value)));
+}
 
 export interface AddTextElementOptions {
   faceId?: string | undefined;
@@ -49,6 +61,7 @@ export type TextElementPatch = ElementPatch;
 
 export interface EditorStageStoreState {
   dieline: Dieline;
+  dimensions: Dieline['dimensions'];
   elements: DesignElement[];
   committedElements: DesignElement[];
   selectedElementId: string | null;
@@ -60,7 +73,7 @@ export interface EditorStageStoreState {
   selectElement: (id: string | null) => void;
   commitElements: () => void;
   setFoldAngle: (angle: number) => void;
-  setDimensions: (dimensions: Dieline['dimensions']) => void;
+  setDimensions: (length: number, width: number, height: number) => void;
   reset: () => void;
 }
 
@@ -110,6 +123,7 @@ function patchElement(element: DesignElement, patch: ElementPatch): DesignElemen
 
 export const useEditorStore = create<EditorStageStoreState>((set) => ({
   dieline: createInitialDieline(),
+  dimensions: { ...DEFAULT_DIELINE_DIMENSIONS },
   elements: [],
   committedElements: [],
   selectedElementId: null,
@@ -253,14 +267,82 @@ export const useEditorStore = create<EditorStageStoreState>((set) => ({
       foldAngle: Math.min(90, Math.max(0, Number.isFinite(angle) ? angle : 0)),
     }),
 
-  setDimensions: (dimensions) =>
-    set({
-      dieline: generateTuckEndBox(dimensions),
+  setDimensions: (length, width, height) =>
+    set((state) => {
+      const current = state.dimensions;
+      const nextLength = clampBoxDimensionMm(length, current.length);
+      const nextWidth = clampBoxDimensionMm(width, current.width);
+      const nextHeight = clampBoxDimensionMm(height, current.height);
+
+      if (
+        nextLength === current.length &&
+        nextWidth === current.width &&
+        nextHeight === current.height
+      ) {
+        return state;
+      }
+
+      const nextDimensions: Dieline['dimensions'] = {
+        length: nextLength,
+        width: nextWidth,
+        height: nextHeight,
+        thickness: current.thickness,
+        bleedSize: current.bleedSize,
+      };
+      const nextDieline = generateTuckEndBox(nextDimensions);
+
+      const boundsByFaceId = new Map<string, SvgPathBoundsMm>();
+      for (const face of nextDieline.faces) {
+        boundsByFaceId.set(face.id, computeSvgPathBoundsMm(face.path));
+      }
+
+      const clampListToDieline = (items: DesignElement[]): DesignElement[] => {
+        let changed = false;
+        const clamped = items.map((element) => {
+          const faceBounds = boundsByFaceId.get(element.faceId);
+          if (!faceBounds) {
+            return element;
+          }
+          const nextPos = clampElementPositionToFace(
+            element,
+            element.transform.x,
+            element.transform.y,
+            faceBounds,
+          );
+          if (nextPos.x === element.transform.x && nextPos.y === element.transform.y) {
+            return element;
+          }
+          changed = true;
+          return {
+            ...element,
+            transform: {
+              ...element.transform,
+              x: nextPos.x,
+              y: nextPos.y,
+            },
+          };
+        });
+        return changed ? clamped : items;
+      };
+
+      const nextElements = clampListToDieline(state.elements);
+      const nextCommittedElements =
+        state.committedElements === state.elements
+          ? nextElements
+          : clampListToDieline(state.committedElements);
+
+      return {
+        dieline: nextDieline,
+        dimensions: nextDieline.dimensions,
+        elements: nextElements,
+        committedElements: nextCommittedElements,
+      };
     }),
 
   reset: () =>
     set({
       dieline: createInitialDieline(),
+      dimensions: { ...DEFAULT_DIELINE_DIMENSIONS },
       elements: [],
       committedElements: [],
       selectedElementId: null,

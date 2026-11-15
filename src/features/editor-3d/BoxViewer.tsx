@@ -276,8 +276,23 @@ export function BoxViewer({
   onRegisterCapture,
 }: BoxViewerProps) {
   const dieline = useMemo(
-    () => dielineProp ?? generateTuckEndBox(dimensions),
-    [dielineProp, dimensions],
+    () =>
+      dielineProp ??
+      generateTuckEndBox({
+        length: dimensions.length,
+        width: dimensions.width,
+        height: dimensions.height,
+        thickness: dimensions.thickness,
+        bleedSize: dimensions.bleedSize,
+      }),
+    [
+      dielineProp,
+      dimensions.bleedSize,
+      dimensions.height,
+      dimensions.length,
+      dimensions.thickness,
+      dimensions.width,
+    ],
   );
   const model = useMemo(() => buildBoxGeometry(dieline), [dieline]);
   const shadowTexture = useMemo(() => createRadialShadowTexture(64), []);
@@ -332,7 +347,7 @@ export function BoxViewer({
         dpr={[1, 1.5]}
         shadows={false}
         gl={{ antialias: false, powerPreference: 'default', preserveDrawingBuffer: true }}
-        camera={{ position: [2.6, 2.8, 4.1], fov: 40, near: 0.05, far: 100 }}
+        camera={{ position: [2.6, 2.8, 4.1], fov: 40, near: 0.05, far: 150 }}
       >
         <color attach="background" args={['#f3ece3']} />
 
@@ -341,7 +356,7 @@ export function BoxViewer({
         <directionalLight position={[3.5, 6, 4.5]} intensity={1.15} />
 
         {/* Subtle floor grid and radial gradient fake contact shadow */}
-        <gridHelper args={[10, 20, '#c3b7a9', '#e2d9ce']} position={[0, -0.004, 0]} />
+        <gridHelper args={[16, 32, '#c3b7a9', '#e2d9ce']} position={[0, -0.004, 0]} />
         <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.002, 0]}>
           <planeGeometry args={[shadowWidth, shadowDepth]} />
           <meshBasicMaterial map={shadowTexture} transparent depthWrite={false} />
@@ -365,7 +380,7 @@ export function BoxViewer({
           enableRotate
           enableDamping={false}
           minDistance={0.8}
-          maxDistance={12}
+          maxDistance={24}
           maxPolarAngle={Math.PI * 0.49}
         />
       </Canvas>

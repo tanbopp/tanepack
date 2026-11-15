@@ -101,4 +101,45 @@ describe('useEditorStore', () => {
     useEditorStore.getState().setFoldAngle(-20);
     expect(useEditorStore.getState().foldAngle).toBe(0);
   });
+
+  it('regenerates dieline and dimensions on setDimensions, preserving in-bounds artwork and clamping out-of-bounds artwork', () => {
+    const text = useEditorStore.getState().addElement();
+    const initialX = text.transform.x;
+    const initialY = text.transform.y;
+
+    // Expanding length keeps front-centered text safely inside new bounds in place
+    useEditorStore.getState().setDimensions(150, 50, 100);
+    const expanded = useEditorStore.getState();
+    expect(expanded.dimensions.length).toBe(150);
+    expect(expanded.dieline.dimensions.length).toBe(150);
+    expect(expanded.dieline.totalWidth).toBe(417);
+    expect(expanded.elements[0]?.transform.x).toBe(initialX);
+    expect(expanded.elements[0]?.transform.y).toBe(initialY);
+
+    // Shrinking box to 50x50x50 clamps text and committedElements safely into the smaller front face
+    useEditorStore.getState().setDimensions(50, 50, 50);
+    const shrunk = useEditorStore.getState();
+    const shrunkFront = shrunk.dieline.faces.find((f) => f.id === 'front')!;
+    const shrunkBounds = computeSvgPathBoundsMm(shrunkFront.path);
+    expect(shrunk.dimensions).toEqual({
+      length: 50,
+      width: 50,
+      height: 50,
+      thickness: 0.5,
+      bleedSize: 3,
+    });
+    expect(shrunk.dieline.totalWidth).toBe(217);
+    expect(shrunk.elements[0]!.transform.x).toBeGreaterThanOrEqual(shrunkBounds.minX);
+    expect(shrunk.elements[0]!.transform.x).toBeLessThanOrEqual(shrunkBounds.maxX);
+    expect(shrunk.elements[0]!.transform.y).toBeGreaterThanOrEqual(shrunkBounds.minY);
+    expect(shrunk.elements[0]!.transform.y).toBeLessThanOrEqual(shrunkBounds.maxY);
+    expect(shrunk.committedElements[0]!.transform).toEqual(shrunk.elements[0]!.transform);
+
+    // Non-positive dimensions fall back safely; extreme values clamp within [10, 2000]
+    useEditorStore.getState().setDimensions(0, -10, 5000);
+    const clamped = useEditorStore.getState();
+    expect(clamped.dimensions.length).toBe(50);
+    expect(clamped.dimensions.width).toBe(50);
+    expect(clamped.dimensions.height).toBe(2000);
+  });
 });

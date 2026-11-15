@@ -177,6 +177,7 @@ export function useProjectPersistence(): ProjectPersistenceState {
 
     useEditorStore.setState({
       dieline: loaded.dieline,
+      dimensions: loaded.dieline.dimensions,
       elements: outsideElements,
       committedElements: outsideElements,
       selectedElementId: null,

@@ -3,11 +3,14 @@ export { DielineStage, type DielineStageProps } from './DielineStage';
 export {
   type AddImageElementOptions,
   type AddTextElementOptions,
+  clampBoxDimensionMm,
   DEFAULT_DIELINE_DIMENSIONS,
   DEFAULT_IMAGE_SIZE_MM,
   DEFAULT_TEXT_CONTENT,
   type EditorStageStoreState,
   type ElementPatch,
+  MAX_BOX_DIMENSION_MM,
+  MIN_BOX_DIMENSION_MM,
   type TextElementPatch,
   useEditorStore,
 } from './store';

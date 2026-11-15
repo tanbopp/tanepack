@@ -1,5 +1,5 @@
 // Unit tests for 2D DielineStage SVG rendering, mm-to-px scaling, pan/zoom, and pointer element drag
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { computeSvgPathBoundsMm } from '@entities/dieline';
 import { PX_PER_MM } from '@shared/lib/units';
@@ -314,5 +314,37 @@ describe('DielineStage component', () => {
     if (resizedCommitted.type === 'text') {
       expect(resizedCommitted.style.fontSize).toBeGreaterThan(initialFontSize);
     }
+  });
+
+  it('updates SVG viewBox and auto-fits viewport when parametric dieline dimensions change', () => {
+    render(<DielineStage />);
+
+    const stage = screen.getByTestId('dieline-stage');
+    stage.getBoundingClientRect = () =>
+      ({
+        width: 1000,
+        height: 700,
+        top: 0,
+        left: 0,
+        right: 1000,
+        bottom: 700,
+        x: 0,
+        y: 0,
+        toJSON: () => ({}),
+      }) as DOMRect;
+
+    const svg = screen.getByTestId('dieline-svg');
+    expect(svg.getAttribute('viewBox')).toBe('0 0 317 231.5');
+
+    act(() => {
+      useEditorStore.getState().setDimensions(150, 50, 100);
+    });
+
+    expect(svg.getAttribute('viewBox')).toBe('0 0 417 231.5');
+    const transformBox = screen.getByTestId('stage-transform');
+    const zoomButton = screen.getByRole('button', { name: 'Reset zoom to 100%' });
+    expect(transformBox.style.transform).not.toMatch(/^translate\(0px(?:, 0px)?\) scale\(1\)$/);
+    // 1000px stage fitting a 417mm wide sheet (+26mm margins) yields zoom < 100%
+    expect(Number.parseInt(zoomButton.textContent ?? '', 10)).toBeLessThan(100);
   });
 });
