@@ -1,11 +1,13 @@
-// Root Tanepack application shell composing global providers and router
-import { AppProviders } from '@app/providers';
+// Root Tanepack application shell composing global providers, ErrorBoundary, and router
+import { AppProviders, ErrorBoundary } from '@app/providers';
 import { AppRouter } from '@app/router';
 
 export function App() {
   return (
     <AppProviders>
-      <AppRouter />
+      <ErrorBoundary>
+        <AppRouter />
+      </ErrorBoundary>
     </AppProviders>
   );
 }

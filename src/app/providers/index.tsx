@@ -4,6 +4,13 @@ import { QueryProvider } from '@app/providers/QueryProvider';
 import { SupabaseProvider } from '@app/providers/SupabaseProvider';
 import { AppThemeProvider } from '@app/providers/ThemeProvider';
 
+export {
+  ErrorBoundary,
+  ErrorFallbackView,
+  type ErrorBoundaryProps,
+  type ErrorFallbackViewProps,
+} from '@app/providers/ErrorBoundary';
+
 export interface AppProvidersProps {
   children: ReactNode;
 }

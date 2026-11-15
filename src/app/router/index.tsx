@@ -1,6 +1,7 @@
 // Application browser router with lazy-loaded pages and route metadata handles
 import { lazy, Suspense } from 'react';
-import { createBrowserRouter, RouterProvider } from 'react-router-dom';
+import { createBrowserRouter, RouterProvider, useRouteError } from 'react-router-dom';
+import { ErrorFallbackView } from '@app/providers/ErrorBoundary';
 import { type RouteMetaHandle, ROUTES } from '@app/router/routes';
 import { AppShell } from '@widgets/app-shell/AppShell';
 import { M3CircularProgress } from '@shared/ui';
@@ -15,7 +16,10 @@ const NotFoundPage = lazy(() => import('@pages/not-found/NotFoundPage'));
 const homeHandle: RouteMetaHandle = {
   title: 'Tanepack',
   showBackButton: false,
+  hideTopBar: true,
 };
+
+const routeFallback = <M3CircularProgress label="Loading Tanepack..." />;
 
 const dashboardHandle: RouteMetaHandle = {
   title: 'Tanepack — My Designs',
@@ -38,15 +42,22 @@ const notFoundHandle: RouteMetaHandle = {
   showBackButton: false,
 };
 
+function RouteErrorFallback() {
+  const error = useRouteError();
+  console.error('Unhandled route error caught by router errorElement:', error);
+  return <ErrorFallbackView />;
+}
+
 const router = createBrowserRouter(
   [
     {
       element: <AppShell />,
+      errorElement: <RouteErrorFallback />,
       children: [
         {
           path: ROUTES.HOME,
           element: (
-            <Suspense fallback={<M3CircularProgress />}>
+            <Suspense fallback={routeFallback}>
               <HomePage />
             </Suspense>
           ),
@@ -55,7 +66,7 @@ const router = createBrowserRouter(
         {
           path: ROUTES.DASHBOARD,
           element: (
-            <Suspense fallback={<M3CircularProgress />}>
+            <Suspense fallback={routeFallback}>
               <DashboardPage />
             </Suspense>
           ),
@@ -64,7 +75,7 @@ const router = createBrowserRouter(
         {
           path: ROUTES.EDITOR,
           element: (
-            <Suspense fallback={<M3CircularProgress />}>
+            <Suspense fallback={routeFallback}>
               <EditorPage />
             </Suspense>
           ),
@@ -73,7 +84,7 @@ const router = createBrowserRouter(
         {
           path: ROUTES.LOGIN,
           element: (
-            <Suspense fallback={<M3CircularProgress />}>
+            <Suspense fallback={routeFallback}>
               <LoginPage />
             </Suspense>
           ),
@@ -82,7 +93,7 @@ const router = createBrowserRouter(
         {
           path: ROUTES.REGISTER,
           element: (
-            <Suspense fallback={<M3CircularProgress />}>
+            <Suspense fallback={routeFallback}>
               <RegisterPage />
             </Suspense>
           ),
@@ -91,7 +102,7 @@ const router = createBrowserRouter(
         {
           path: '*',
           element: (
-            <Suspense fallback={<M3CircularProgress />}>
+            <Suspense fallback={routeFallback}>
               <NotFoundPage />
             </Suspense>
           ),
