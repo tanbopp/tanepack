@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1075.00 410.00" width="1075.00mm" height="410.00mm">
+  <defs>
+    <style>
+      .panel-rect { fill: rgba(33, 150, 243, 0.04); stroke: rgba(33, 150, 243, 0.15); stroke-width: 0.3; }
+      .cut-line { stroke: #d32f2f; stroke-width: 0.6; stroke-linecap: round; }
+      .fold-line { stroke: #1976d2; stroke-width: 0.6; stroke-dasharray: 4,3; stroke-linecap: round; }
+      .panel-label { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 8px; fill: #455a64; text-anchor: middle; dominant-baseline: middle; }
+      .dim-label { font-family: monospace; font-size: 7px; fill: #78909c; }
+    </style>
+  </defs>
+  <rect width="1075.00" height="410.00" fill="#fafafa"/>
+  <g transform="translate(30.0, 30.0)">
+    <!-- Panels -->
+    <rect class="panel-rect" x="0.00" y="100.00" width="200.00" height="150.00"/>
+    <text class="panel-label" x="100.00" y="175.00">left</text>
+    <rect class="panel-rect" x="200.00" y="100.00" width="300.00" height="150.00"/>
+    <text class="panel-label" x="350.00" y="175.00">front</text>
+    <rect class="panel-rect" x="500.00" y="100.00" width="200.00" height="150.00"/>
+    <text class="panel-label" x="600.00" y="175.00">right</text>
+    <rect class="panel-rect" x="700.00" y="100.00" width="300.00" height="150.00"/>
+    <text class="panel-label" x="850.00" y="175.00">back</text>
+    <rect class="panel-rect" x="1000.00" y="100.00" width="15.00" height="150.00"/>
+    <text class="panel-label" x="1007.50" y="175.00">joint</text>
+    <rect class="panel-rect" x="0.00" y="250.00" width="200.00" height="100.00"/>
+    <text class="panel-label" x="100.00" y="300.00">bottom_flap_left</text>
+    <rect class="panel-rect" x="200.00" y="250.00" width="300.00" height="100.00"/>
+    <text class="panel-label" x="350.00" y="300.00">bottom_flap_front</text>
+    <rect class="panel-rect" x="500.00" y="250.00" width="200.00" height="100.00"/>
+    <text class="panel-label" x="600.00" y="300.00">bottom_flap_right</text>
+    <rect class="panel-rect" x="700.00" y="250.00" width="300.00" height="100.00"/>
+    <text class="panel-label" x="850.00" y="300.00">bottom_flap_back</text>
+    <rect class="panel-rect" x="0.00" y="0.00" width="200.00" height="100.00"/>
+    <text class="panel-label" x="100.00" y="50.00">top_flap_left</text>
+    <rect class="panel-rect" x="200.00" y="0.00" width="300.00" height="100.00"/>
+    <text class="panel-label" x="350.00" y="50.00">top_flap_front</text>
+    <rect class="panel-rect" x="500.00" y="0.00" width="200.00" height="100.00"/>
+    <text class="panel-label" x="600.00" y="50.00">top_flap_right</text>
+    <rect class="panel-rect" x="700.00" y="0.00" width="300.00" height="100.00"/>
+    <text class="panel-label" x="850.00" y="50.00">top_flap_back</text>
+    <!-- Cut and Fold Lines -->
+    <line class="cut-line" x1="0.00" y1="350.00" x2="1015.00" y2="350.00"/>
+    <line class="cut-line" x1="0.00" y1="0.00" x2="1015.00" y2="0.00"/>
+    <line class="cut-line" x1="0.00" y1="350.00" x2="0.00" y2="0.00"/>
+    <line class="cut-line" x1="1015.00" y1="350.00" x2="1015.00" y2="0.00"/>
+    <line class="fold-line" x1="200.00" y1="350.00" x2="200.00" y2="0.00"/>
+    <line class="fold-line" x1="500.00" y1="350.00" x2="500.00" y2="0.00"/>
+    <line class="fold-line" x1="700.00" y1="350.00" x2="700.00" y2="0.00"/>
+    <line class="fold-line" x1="1000.00" y1="350.00" x2="1000.00" y2="0.00"/>
+    <line class="fold-line" x1="0.00" y1="250.00" x2="1015.00" y2="250.00"/>
+    <line class="fold-line" x1="0.00" y1="100.00" x2="1015.00" y2="100.00"/>
+    <line class="cut-line" x1="200.00" y1="350.00" x2="200.00" y2="250.00"/>
+    <line class="cut-line" x1="200.00" y1="100.00" x2="200.00" y2="0.00"/>
+    <line class="cut-line" x1="500.00" y1="350.00" x2="500.00" y2="250.00"/>
+    <line class="cut-line" x1="500.00" y1="100.00" x2="500.00" y2="0.00"/>
+    <line class="cut-line" x1="700.00" y1="350.00" x2="700.00" y2="250.00"/>
+    <line class="cut-line" x1="700.00" y1="100.00" x2="700.00" y2="0.00"/>
+    <!-- Dimension Annotations -->
+    <text class="dim-label" x="0" y="-10">Blank: 1015.0 mm × 350.0 mm (L=300.0, W=200.0, D=150.0, joint=15.0)</text>
+  </g>
+</svg>
