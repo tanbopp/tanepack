@@ -633,28 +633,38 @@ describe('EditorPage', () => {
     // Open grouped Box Type selector and check group subheaders
     fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Box Type' }));
     expect(screen.getByText('Retail Cartons')).toBeTruthy();
-    expect(screen.getByText('FEFCO 0200 Series (Slotted)')).toBeTruthy();
+    expect(screen.getByText('FEFCO 0200 (Slotted)')).toBeTruthy();
+    expect(screen.getByText('FEFCO 0200 (Tuck Top)')).toBeTruthy();
+    expect(screen.getByText('FEFCO 0200 (Crash Lock)')).toBeTruthy();
 
     // Switch Box Type to FEFCO 0201 (RSC)
-    fireEvent.click(screen.getByRole('option', { name: 'FEFCO 0201 (RSC)' }));
+    fireEvent.click(
+      screen.getByRole('option', { name: 'FEFCO 0201 — Regular Slotted Container (RSC)' }),
+    );
     expect(useEditorStore.getState().archetype).toBe('fefco-0201');
     expect(screen.getByTestId('dieline-svg').getAttribute('viewBox')).toBe('0 0 1037 351');
 
     // Switch Box Type to FEFCO 0202 (Overlap Slotted) -> ½(W + o) = 110.28 mm flaps
     fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Box Type' }));
-    fireEvent.click(screen.getByRole('option', { name: 'FEFCO 0202 (Overlap Slotted)' }));
+    fireEvent.click(
+      screen.getByRole('option', { name: 'FEFCO 0202 — Overlap Slotted Container (ORSC)' }),
+    );
     expect(useEditorStore.getState().archetype).toBe('fefco-0202');
     expect(screen.getByTestId('dieline-svg').getAttribute('viewBox')).toBe('0 0 1037 371.06');
 
     // Switch Box Type to FEFCO 0205 (Center Special Overlap) -> ½ L = 150.25 mm flaps
     fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Box Type' }));
-    fireEvent.click(screen.getByRole('option', { name: 'FEFCO 0205 (Center Special Overlap)' }));
+    fireEvent.click(
+      screen.getByRole('option', { name: 'FEFCO 0205 — Center Special Overlap (CSO)' }),
+    );
     expect(useEditorStore.getState().archetype).toBe('fefco-0205');
     expect(screen.getByTestId('dieline-svg').getAttribute('viewBox')).toBe('0 0 1037 451');
 
     // Switch Box Type to FEFCO 0203 (Full Overlap)
     fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Box Type' }));
-    fireEvent.click(screen.getByRole('option', { name: 'FEFCO 0203 (Full Overlap)' }));
+    fireEvent.click(
+      screen.getByRole('option', { name: 'FEFCO 0203 — Full Overlap Slotted (FOL)' }),
+    );
     expect(useEditorStore.getState().archetype).toBe('fefco-0203');
     expect(screen.getByTestId('dieline-svg').getAttribute('viewBox')).toBe('0 0 1037 551.5');
   });
@@ -680,7 +690,7 @@ describe('EditorPage', () => {
       height: 150,
     });
     expect(screen.getByRole('combobox', { name: 'Box Type' }).textContent).toBe(
-      'FEFCO 0203 (Full Overlap)',
+      'FEFCO 0203 — Full Overlap Slotted (FOL)',
     );
     expect(screen.getByTestId('box-dimensions-summary').textContent).toBe('300 × 200 × 150 mm');
     expect(screen.getByTestId('dieline-svg').getAttribute('viewBox')).toBe('0 0 1037 551.5');
@@ -722,7 +732,7 @@ describe('EditorPage', () => {
       expect(screen.getByTestId('dieline-svg').getAttribute('viewBox')).toBe('0 0 1037 551.5');
     });
     expect(screen.getByRole('combobox', { name: 'Box Type' }).textContent).toBe(
-      'FEFCO 0203 (Full Overlap)',
+      'FEFCO 0203 — Full Overlap Slotted (FOL)',
     );
     expect(
       screen.getByTestId('dieline-svg').querySelector('[data-layer="artwork"] text')?.textContent,

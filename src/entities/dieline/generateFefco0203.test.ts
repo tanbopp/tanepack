@@ -25,7 +25,7 @@ describe('generateFefco0203 (Full Overlap)', () => {
     expect(zeroThickness.totalHeight).toBe(550);
   });
 
-  it('sizes outer flaps at full Depth D so opposing outer flaps overlap 100%, while inner flaps stay < W/2', () => {
+  it('sizes outer AND inner flaps at exact full Depth D (1.0 * W) per FEFCO 0203 PDF spec without inner clamping', () => {
     const dieline = generateFefco0203(SHIPPING_SMALL);
 
     const topOuterFront = computeSvgPathBoundsMm(
@@ -40,28 +40,33 @@ describe('generateFefco0203 (Full Overlap)', () => {
     const topInnerLeft = computeSvgPathBoundsMm(
       dieline.faces.find((f) => f.id === 'top-flap-left')!.path,
     );
+    const botInnerLeft = computeSvgPathBoundsMm(
+      dieline.faces.find((f) => f.id === 'bottom-flap-left')!.path,
+    );
 
     const fullDepthEff = SHIPPING_SMALL.width + SHIPPING_SMALL.thickness;
     expect(topOuterFront.height).toBeCloseTo(fullDepthEff, 4);
     expect(topOuterBack.height).toBeCloseTo(fullDepthEff, 4);
     expect(botOuterFront.height).toBeCloseTo(fullDepthEff, 4);
-
-    // Inner flaps remain safely under half the 300.5mm width so opposing inner flaps never collide
-    expect(topInnerLeft.height * 2).toBeLessThan(SHIPPING_SMALL.length + SHIPPING_SMALL.thickness);
-    expect(topInnerLeft.height).toBeLessThan(topOuterFront.height);
+    expect(topInnerLeft.height).toBeCloseTo(fullDepthEff, 4);
+    expect(botInnerLeft.height).toBeCloseTo(fullDepthEff, 4);
   });
 
-  it('staggers Back outer and Front outer foldGroups with distinct layerOrder and inward bottom stacking', () => {
+  it('staggers Back outer and Front outer foldGroups plus colliding inner pairs to prevent Z-fighting', () => {
     const dieline = generateFefco0203(SHIPPING_SMALL);
 
     const innerLeft = dieline.foldGroups.find((g) => g.id === 'group-top-flap-left')!;
+    const innerRight = dieline.foldGroups.find((g) => g.id === 'group-top-flap-right')!;
     const backOuterTop = dieline.foldGroups.find((g) => g.id === 'group-top-flap-back')!;
     const frontOuterTop = dieline.foldGroups.find((g) => g.id === 'group-top-flap-front')!;
     const botBackOuter = dieline.foldGroups.find((g) => g.id === 'group-bottom-flap-back')!;
     const botLeftInner = dieline.foldGroups.find((g) => g.id === 'group-bottom-flap-left')!;
+    const botRightInner = dieline.foldGroups.find((g) => g.id === 'group-bottom-flap-right')!;
 
     expect(dieline.foldGroups.some((g) => g.id === 'group-bottom-flap-front')).toBe(false);
     expect(innerLeft.layerOrder).toBe(0);
+    expect(innerRight.layerOrder).toBe(0);
+    expect(innerRight.layerOffsetTier!).toBeGreaterThan(innerLeft.layerOffsetTier!);
     expect(backOuterTop.layerOrder).toBe(1);
     expect(frontOuterTop.layerOrder).toBe(2);
 
@@ -70,6 +75,7 @@ describe('generateFefco0203 (Full Overlap)', () => {
     expect(botBackOuter.layerOffsetTier).toBe(1);
     expect(botLeftInner.layerOffsetDirection).toBe(1);
     expect(botLeftInner.layerOffsetTier).toBe(2);
+    expect(botRightInner.layerOffsetTier!).toBeGreaterThan(botLeftInner.layerOffsetTier!);
 
     // Inner closes first, Back outer closes underneath second, Front outer closes on top last
     expect(innerLeft.foldStage![1]).toBeLessThan(backOuterTop.foldStage![1]);

@@ -175,27 +175,35 @@ describe('FefcoFactory (generateFefcoBox)', () => {
     expect(f0209.totalHeight).toBe(300.88);
   });
 
-  it('generates asymmetric FEFCO 0215 (Full Overlap top + RSC bottom) with exact flap heights', () => {
+  it('generates PDF-calibrated FEFCO 0215 (Tuck Top 1.0W + 0.37W dust + 1-2-3 Snap-Lock bottom) with 12 faces', () => {
     const dieline = generateDieline('fefco-0215', SAMPLE_DIMENSIONS);
 
     expect(dieline.archetype).toBe('fefco-0215');
     expect(dieline.baseFaceId).toBe('bottom-flap-front');
-    expect(dieline.faces).toHaveLength(13);
-    expect(dieline.totalHeight).toBe(451.25);
+    // GlueTab + 4 body walls + 3 top flaps (back lid + 2 dust) + 4 snap-lock bottom flaps = 12 faces
+    expect(dieline.faces).toHaveLength(12);
+    expect(dieline.faces.some((f) => f.id === 'top-flap-front')).toBe(false);
 
-    const topFrontOuter = computeSvgPathBoundsMm(
-      dieline.faces.find((f) => f.id === 'top-flap-front')!.path,
+    const topLid = computeSvgPathBoundsMm(
+      dieline.faces.find((f) => f.id === 'top-flap-back')!.path,
     );
-    const botBackOuter = computeSvgPathBoundsMm(
-      dieline.faces.find((f) => f.id === 'bottom-flap-back')!.path,
+    const topDust = computeSvgPathBoundsMm(
+      dieline.faces.find((f) => f.id === 'top-flap-left')!.path,
     );
-    expect(topFrontOuter.height).toBeCloseTo(200.5, 4);
-    expect(botBackOuter.height).toBeCloseTo(100.25, 4);
+    const botLockFront = computeSvgPathBoundsMm(
+      dieline.faces.find((f) => f.id === 'bottom-flap-front')!.path,
+    );
+    // 1.0 * W_eff (200.5) + tuckDepth (20) = 220.5 mm top lid
+    expect(topLid.height).toBeCloseTo(220.5, 4);
+    expect(topDust.height).toBeCloseTo(74.19, 2);
+    expect(botLockFront.height).toBeCloseTo(roundTo2(0.63 * 200.5), 2);
 
-    const topFrontGroup = dieline.foldGroups.find((g) => g.id === 'group-top-flap-front')!;
-    const botBackGroup = dieline.foldGroups.find((g) => g.id === 'group-bottom-flap-back')!;
-    expect(topFrontGroup.layerOrder).toBe(2);
-    expect(botBackGroup.layerOffsetTier).toBe(0);
+    const tuckLidFace = dieline.faces.find((f) => f.id === 'top-flap-back')!;
+    expect(tuckLidFace.folds).toContain('fold-top-tuck-tongue');
+
+    const topLidGroup = dieline.foldGroups.find((g) => g.id === 'group-top-flap-back')!;
+    expect(topLidGroup.tongueLayerOrder).toBe(-1);
+    expect(topLidGroup.tongueLayerOffsetMm).toBeLessThan(0);
   });
 
   it('supports hasGlueTab: false by omitting glue-tab face/fold/group and closing cut/bleed paths cleanly at x = 0', () => {
@@ -223,16 +231,31 @@ describe('FefcoFactory (generateFefcoBox)', () => {
     expect(dieline.bleeds[0]!.path).toMatch(VALID_SVG_PATH_REGEX);
   });
 
-  it('throws a clear unimplemented error for crash-lock or tuck configs instead of silently mis-generating', () => {
-    const crashLockConfig: FefcoConfig = {
-      id: 'fefco-0201',
-      name: 'Future Crash-Lock Prototype',
+  it('supports tuck + crash-lock configs natively and throws cleanly for unsupported flap types', () => {
+    const tuckCrashConfig: FefcoConfig = {
+      id: 'fefco-0233',
+      name: 'Tuck + Crash-Lock Combo',
       flapConfig: { top: 'tuck', bottom: 'crash-lock' },
       panelStyle: 'standard',
     };
 
-    expect(() => generateFefcoBox(crashLockConfig, SAMPLE_DIMENSIONS)).toThrow(
-      /not implemented yet/,
+    const dieline = generateFefcoBox(tuckCrashConfig, SAMPLE_DIMENSIONS);
+    expect(dieline.faces.some((f) => f.id === 'top-flap-back')).toBe(true);
+    expect(dieline.folds.some((f) => f.id === 'fold-top-tuck-tongue')).toBe(true);
+    expect(dieline.cuts[0]!.path).toMatch(VALID_SVG_PATH_REGEX);
+
+    const invalidConfig = {
+      id: 'fefco-0201',
+      name: 'Unsupported Prototype',
+      flapConfig: { top: 'invalid-flap' },
+    } as unknown as FefcoConfig;
+
+    expect(() => generateFefcoBox(invalidConfig, SAMPLE_DIMENSIONS)).toThrow(
+      /Unsupported FEFCO top flap type/,
     );
   });
 });
+
+function roundTo2(v: number): number {
+  return Math.round(v * 100) / 100;
+}

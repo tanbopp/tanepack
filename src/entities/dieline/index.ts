@@ -1,4 +1,10 @@
 // Public barrel exports for dieline entity types, generators, registry, and millimeter bounds helpers
+export {
+  FEFCO_CATALOG_ENTRIES,
+  FEFCO_CONFIG_BY_ID,
+  type FefcoCatalogEntry,
+  type FefcoCatalogGroup,
+} from '@entities/dieline/fefcoCatalogConfigs';
 export { generateFefcoBox } from '@entities/dieline/fefcoFactory';
 export { generateFefco0200 } from '@entities/dieline/generateFefco0200';
 export { generateFefco0202 } from '@entities/dieline/generateFefco0202';
@@ -26,7 +32,9 @@ export type {
   DielineArchetype,
   Face,
   FefcoAxisBasis,
+  FefcoColumnLayout,
   FefcoConfig,
+  FefcoFlapEndPreset,
   FefcoFlapMath,
   FefcoFlapType,
   FefcoPanelStyle,

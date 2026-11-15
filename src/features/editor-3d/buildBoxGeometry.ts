@@ -548,6 +548,102 @@ export function buildBoxGeometry(dieline: Dieline): KinematicBoxModel {
   const createdParts: KinematicFacePart[] = [];
   const thicknessStepWorld = Math.max(0.5, dieline.dimensions.thickness) * DIELINE_SCALE_TO_3D;
 
+  const splitTuckFaceIntoParts = (
+    face: Face,
+    pivotMm: Point,
+    pivotFoldId: string | null,
+    nodeId: string,
+    nodeName: string,
+    lidLayerOrder: number,
+    tongueLayerOrder: number,
+    tongueLayerOffsetMm: number,
+    animatedAngleRange: [number, number],
+    foldStage: [number, number],
+  ): { lidPart: KinematicFacePart; tongueNode: KinematicBoxNode } | null => {
+    const faceBounds = faceBoundsMap.get(face.id);
+    if (!faceBounds) {
+      return null;
+    }
+
+    const internalHorizontalFold = face.folds
+      .filter((fId) => fId !== pivotFoldId)
+      .map((fId) => foldMap.get(fId))
+      .find((candidate): candidate is Fold =>
+        Boolean(
+          candidate &&
+          Math.abs(candidate.from.y - candidate.to.y) < 0.01 &&
+          candidate.from.y > faceBounds.minY + 1 &&
+          candidate.from.y < faceBounds.maxY - 1,
+        ),
+      );
+
+    if (!internalHorizontalFold) {
+      return null;
+    }
+
+    const splitY = internalHorizontalFold.from.y;
+    const polygonMm = sampleFacePolygonMm(face.path);
+    const keepLidBelow = pivotMm.y <= splitY;
+    const lidPoly = clipPolygonByHorizontalLine(polygonMm, splitY, !keepLidBelow);
+    const tonguePoly = clipPolygonByHorizontalLine(polygonMm, splitY, keepLidBelow);
+    if (lidPoly.length < 3 || tonguePoly.length < 3) {
+      return null;
+    }
+
+    const lidShapeData = createShapeFromMmPolygon(lidPoly, pivotMm);
+    const lidPart = buildGeometryPartFromShape(
+      face.id,
+      face.id,
+      face.name,
+      lidShapeData.shape,
+      lidShapeData.boundsMm,
+      pivotMm,
+      faceBounds,
+      lidLayerOrder,
+    );
+
+    const tonguePivotMm = midpoint(internalHorizontalFold.from, internalHorizontalFold.to);
+    const tongueShapeData = createShapeFromMmPolygon(tonguePoly, tonguePivotMm);
+    const tonguePart = buildGeometryPartFromShape(
+      `${face.id}-tongue`,
+      face.id,
+      `${face.name} Tongue`,
+      tongueShapeData.shape,
+      tongueShapeData.boundsMm,
+      tonguePivotMm,
+      faceBounds,
+      tongueLayerOrder,
+    );
+
+    const tongueRule = computeRotationRule(
+      internalHorizontalFold,
+      tonguePivotMm,
+      tongueShapeData.boundsMm.center,
+    );
+
+    return {
+      lidPart,
+      tongueNode: {
+        id: nodeId,
+        name: `${nodeName} Tongue`,
+        position: [
+          (tonguePivotMm.x - pivotMm.x) * DIELINE_SCALE_TO_3D,
+          0,
+          (tonguePivotMm.y - pivotMm.y) * DIELINE_SCALE_TO_3D,
+        ],
+        pivotMm: tonguePivotMm,
+        rotationAxis: tongueRule.axis,
+        rotationSign: tongueRule.sign,
+        animatedAngleRange,
+        foldStage,
+        layerOrder: tongueLayerOrder,
+        layerOffsetWorld: tongueLayerOffsetMm * DIELINE_SCALE_TO_3D,
+        faces: [tonguePart],
+        children: [],
+      },
+    };
+  };
+
   const buildNode = (groupId: string, parentPivotMm: Point): KinematicBoxNode => {
     const group = groupMap.get(groupId);
     if (!group) {
@@ -596,82 +692,24 @@ export function buildBoxGeometry(dieline: Dieline): KinematicBoxModel {
       }
 
       // Check for an internal horizontal crease inside tuck closures so tongues tuck 90° inward
-      const faceBounds = faceBoundsMap.get(face.id);
-      const internalHorizontalFold = face.folds
-        .filter((fId) => fId !== group.pivotFoldId)
-        .map((fId) => foldMap.get(fId))
-        .find((candidate): candidate is Fold =>
-          Boolean(
-            candidate &&
-            Math.abs(candidate.from.y - candidate.to.y) < 0.01 &&
-            faceBounds &&
-            candidate.from.y > faceBounds.minY + 1 &&
-            candidate.from.y < faceBounds.maxY - 1,
-          ),
-        );
+      const splitTuck = splitTuckFaceIntoParts(
+        face,
+        pivotMm,
+        group.pivotFoldId,
+        `${group.id}-tongue`,
+        group.name,
+        layerOrder ?? 1,
+        group.tongueLayerOrder ?? 0,
+        group.tongueLayerOffsetMm ?? 0,
+        group.animatedAngleRange,
+        foldStage,
+      );
 
-      if (internalHorizontalFold && faceBounds) {
-        const splitY = internalHorizontalFold.from.y;
-        const polygonMm = sampleFacePolygonMm(face.path);
-        const keepLidBelow = pivotMm.y <= splitY;
-        const lidPoly = clipPolygonByHorizontalLine(polygonMm, splitY, !keepLidBelow);
-        const tonguePoly = clipPolygonByHorizontalLine(polygonMm, splitY, keepLidBelow);
-
-        if (lidPoly.length >= 3 && tonguePoly.length >= 3) {
-          const lidShapeData = createShapeFromMmPolygon(lidPoly, pivotMm);
-          const lidPart = buildGeometryPartFromShape(
-            face.id,
-            face.id,
-            face.name,
-            lidShapeData.shape,
-            lidShapeData.boundsMm,
-            pivotMm,
-            faceBounds,
-            layerOrder ?? 1,
-          );
-          directFaces.push(lidPart);
-          createdParts.push(lidPart);
-
-          const tonguePivotMm = midpoint(internalHorizontalFold.from, internalHorizontalFold.to);
-          const tongueShapeData = createShapeFromMmPolygon(tonguePoly, tonguePivotMm);
-          const tonguePart = buildGeometryPartFromShape(
-            `${face.id}-tongue`,
-            face.id,
-            `${face.name} Tongue`,
-            tongueShapeData.shape,
-            tongueShapeData.boundsMm,
-            tonguePivotMm,
-            faceBounds,
-            0,
-          );
-          createdParts.push(tonguePart);
-
-          const tongueRule = computeRotationRule(
-            internalHorizontalFold,
-            tonguePivotMm,
-            tongueShapeData.boundsMm.center,
-          );
-
-          extraChildren.push({
-            id: `${group.id}-tongue`,
-            name: `${group.name} Tongue`,
-            position: [
-              (tonguePivotMm.x - pivotMm.x) * DIELINE_SCALE_TO_3D,
-              0,
-              (tonguePivotMm.y - pivotMm.y) * DIELINE_SCALE_TO_3D,
-            ],
-            pivotMm: tonguePivotMm,
-            rotationAxis: tongueRule.axis,
-            rotationSign: tongueRule.sign,
-            animatedAngleRange: group.animatedAngleRange,
-            foldStage,
-            layerOrder: 0,
-            layerOffsetWorld: 0,
-            faces: [tonguePart],
-            children: [],
-          });
-          continue;
-        }
+      if (splitTuck) {
+        directFaces.push(splitTuck.lidPart);
+        createdParts.push(splitTuck.lidPart, ...splitTuck.tongueNode.faces);
+        extraChildren.push(splitTuck.tongueNode);
+        continue;
       }
 
       const part = createFaceGeometryPart(face, pivotMm, layerOrder ?? undefined);
@@ -701,11 +739,34 @@ export function buildBoxGeometry(dieline: Dieline): KinematicBoxModel {
     };
   };
 
-  const rootDirectParts = rootFaces.map((face) => {
+  const rootDirectParts: KinematicFacePart[] = [];
+  const rootExtraChildren: KinematicBoxNode[] = [];
+  for (const face of rootFaces) {
+    // Support base-anchored tuck covers (e.g. FEFCO 0210) whose tongue folds 90° up inside the opposite wall
+    const rootTuckOffsetMm = -(dieline.dimensions.thickness * 1.5 + 0.5);
+    const splitRootTuck = splitTuckFaceIntoParts(
+      face,
+      rootPivotMm,
+      null,
+      `${face.id}-tongue`,
+      face.name,
+      1,
+      -1,
+      rootTuckOffsetMm,
+      [0, 90],
+      [60, 90],
+    );
+    if (splitRootTuck) {
+      rootDirectParts.push(splitRootTuck.lidPart);
+      createdParts.push(splitRootTuck.lidPart, ...splitRootTuck.tongueNode.faces);
+      rootExtraChildren.push(splitRootTuck.tongueNode);
+      continue;
+    }
+
     const part = createFaceGeometryPart(face, rootPivotMm);
+    rootDirectParts.push(part);
     createdParts.push(part);
-    return part;
-  });
+  }
 
   const root: KinematicBoxNode = {
     id: `root-${primaryRootFace.id}`,
@@ -719,7 +780,10 @@ export function buildBoxGeometry(dieline: Dieline): KinematicBoxModel {
     layerOrder: null,
     layerOffsetWorld: 0,
     faces: rootDirectParts,
-    children: rootChildGroupIds.map((groupId) => buildNode(groupId, rootPivotMm)),
+    children: [
+      ...rootChildGroupIds.map((groupId) => buildNode(groupId, rootPivotMm)),
+      ...rootExtraChildren,
+    ],
   };
 
   const shadowExtent = {

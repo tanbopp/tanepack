@@ -57,7 +57,8 @@ export function DielinePreviewSvg({
           <path
             key={cut.id}
             d={cut.path}
-            fill="#ffffff"
+            fill={cut.id === 'cut-outer' ? '#ffffff' : 'none'}
+            fillRule={cut.id === 'cut-outer' ? 'evenodd' : undefined}
             stroke="#1b1b1f"
             strokeWidth={cutStrokeWidth}
             strokeLinejoin="round"

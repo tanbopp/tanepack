@@ -2,6 +2,7 @@
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
 import {
+  generateDieline,
   generateFefco0200,
   generateFefco0202,
   generateFefco0203,
@@ -444,21 +445,68 @@ describe('buildBoxGeometry', () => {
     });
     const mixModel = buildBoxGeometry(mix);
     const mixClosed = computeFaceWorldBounds(mixModel.root, 90);
+    // 12 primary faces + 1 articulated top-flap-back-tongue node = 13 world meshes
     expect(mixClosed.size).toBe(13);
 
-    // Top flaps use full 200.5mm overlap while bottom flaps use 100.25mm RSC center-meeting base on Y=0
-    const topFront = mixClosed.get('top-flap-front')!;
-    const topBack = mixClosed.get('top-flap-back')!;
+    // 0215: Top tuck lid (1.0*W) + 20mm articulated tongue on top-flap-back + 1-2-3 snap-lock base on Y=0
+    const topLid = mixClosed.get('top-flap-back')!;
+    const topTongue = mixClosed.get('top-flap-back-tongue')!;
     const botFront = mixClosed.get('bottom-flap-front')!;
+    const botLeft = mixClosed.get('bottom-flap-left')!;
     const botBack = mixClosed.get('bottom-flap-back')!;
-    expect(topFront.max.z - topFront.min.z).toBeCloseTo(2.005, 3);
-    expect(topFront.min.y).toBeGreaterThan(topBack.min.y);
+    const frontWall = mixClosed.get('front')!;
+    expect(topLid.max.z - topLid.min.z).toBeCloseTo(2.005, 3);
+    expect(topTongue.max.y - topTongue.min.y).toBeCloseTo(0.2, 2);
+    expect(topTongue.min.y).toBeLessThan(frontWall.max.y);
+    // Tucked strictly inside the front wall cavity (interior spans [frontWall.min.z, topLid.max.z]) with ~1.25mm clearance
+    expect(topTongue.min.z).toBeGreaterThan(frontWall.min.z);
+    expect(topTongue.max.z).toBeLessThan(topLid.max.z);
     expect(botFront.min.y).toBeCloseTo(0, 4);
-    expect(botBack.min.y).toBeCloseTo(0, 4);
-    expect(botFront.max.z - botFront.min.z).toBeCloseTo(1.0025, 3);
-    expect(botBack.max.z - botBack.min.z).toBeCloseTo(1.0025, 3);
+    expect(botLeft.min.y).toBeGreaterThan(botFront.min.y);
+    expect(botBack.min.y).toBeGreaterThan(botFront.min.y);
 
     mixModel.dispose();
+
+    // Verify FEFCO 0210 (Double RETT anchored on bottom-flap-back) and FEFCO 0240 (upright Euroslot hang header)
+    const f0210 = generateDieline('fefco-0210', {
+      length: 160,
+      width: 100,
+      height: 110,
+      thickness: 0.5,
+      bleedSize: 3,
+    });
+    const f0210Model = buildBoxGeometry(f0210);
+    const rootCoverFace = f0210Model.root.faces.find((f) => f.faceId === 'bottom-flap-back')!;
+    rootCoverFace.geometry.computeBoundingBox();
+    expect(rootCoverFace.geometry.boundingBox!.min.y).toBeCloseTo(0, 4);
+    const botTongueNode = f0210Model.root.children.find((c) =>
+      c.faces.some((f) => f.faceId === 'bottom-flap-back-tongue'),
+    )!;
+    expect(botTongueNode).toBeTruthy();
+    expect(computeNodeTargetAngleDeg(botTongueNode, 90).targetDeg).toBe(90);
+
+    const f0210Closed = computeFaceWorldBounds(f0210Model.root, 90);
+    expect(f0210Closed.get('front')!.max.y).toBeCloseTo(1.105, 3);
+    expect(f0210Closed.get('bottom-flap-back-tongue')!.max.y).toBeGreaterThan(0.18);
+    expect(f0210Closed.get('top-flap-back-tongue')!.min.y).toBeLessThan(
+      f0210Closed.get('front')!.max.y,
+    );
+    f0210Model.dispose();
+
+    const f0240 = generateDieline('fefco-0240', {
+      length: 130,
+      width: 85,
+      height: 170,
+      thickness: 0.5,
+      bleedSize: 3,
+    });
+    const f0240Model = buildBoxGeometry(f0240);
+    const f0240Closed = computeFaceWorldBounds(f0240Model.root, 90);
+    // Upright twin-Euroslot header extends straight upward above box height (1.705 + 1.07*0.855)
+    expect(f0240Closed.get('top-flap-back')!.max.y).toBeGreaterThan(
+      f0240Closed.get('front')!.max.y + 0.5,
+    );
+    f0240Model.dispose();
   });
 
   it('builds outsideGeometry with horizontally mirrored UVs (1 - u) for BackSide exterior readability', () => {

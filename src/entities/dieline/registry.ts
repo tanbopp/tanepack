@@ -1,5 +1,7 @@
 // Central FEFCO/carton archetype registry and unified generateDieline router
 import type { Dieline, DielineArchetype } from '@entities/dieline/types';
+import { FEFCO_CATALOG_ENTRIES, type FefcoCatalogGroup } from './fefcoCatalogConfigs.ts';
+import { generateFefcoBox } from './fefcoFactory.ts';
 import { generateFefco0200 } from './generateFefco0200.ts';
 import { generateFefco0202 } from './generateFefco0202.ts';
 import { generateFefco0203 } from './generateFefco0203.ts';
@@ -13,7 +15,7 @@ import { generateTuckEndBox } from './generateTuckEndBox.ts';
 
 export type DielineGeneratorFn = (dimensions: Dieline['dimensions']) => Dieline;
 
-export type DielineArchetypeGroup = 'Retail Cartons' | 'FEFCO 0200 Series (Slotted)';
+export type DielineArchetypeGroup = 'Retail Cartons' | FefcoCatalogGroup;
 
 export interface DielineArchetypeOption {
   id: DielineArchetype;
@@ -21,45 +23,7 @@ export interface DielineArchetypeOption {
   group: DielineArchetypeGroup;
 }
 
-export const DIELINE_ARCHETYPE_OPTIONS: readonly DielineArchetypeOption[] = [
-  { id: 'tuck-end', label: 'Tuck-End Box', group: 'Retail Cartons' },
-  { id: 'fefco-0200', label: 'FEFCO 0200 (Half Slotted)', group: 'FEFCO 0200 Series (Slotted)' },
-  { id: 'fefco-0201', label: 'FEFCO 0201 (RSC)', group: 'FEFCO 0200 Series (Slotted)' },
-  {
-    id: 'fefco-0202',
-    label: 'FEFCO 0202 (Overlap Slotted)',
-    group: 'FEFCO 0200 Series (Slotted)',
-  },
-  { id: 'fefco-0203', label: 'FEFCO 0203 (Full Overlap)', group: 'FEFCO 0200 Series (Slotted)' },
-  {
-    id: 'fefco-0204',
-    label: 'FEFCO 0204 (Center Special Slotted)',
-    group: 'FEFCO 0200 Series (Slotted)',
-  },
-  {
-    id: 'fefco-0205',
-    label: 'FEFCO 0205 (Center Special Overlap)',
-    group: 'FEFCO 0200 Series (Slotted)',
-  },
-  {
-    id: 'fefco-0206',
-    label: 'FEFCO 0206 (Center Special Full Overlap)',
-    group: 'FEFCO 0200 Series (Slotted)',
-  },
-  {
-    id: 'fefco-0209',
-    label: 'FEFCO 0209 (Short Top Flap)',
-    group: 'FEFCO 0200 Series (Slotted)',
-  },
-  {
-    id: 'fefco-0215',
-    label: 'FEFCO 0215 (Overlap Top / RSC Bottom)',
-    group: 'FEFCO 0200 Series (Slotted)',
-  },
-];
-
-export const DielineGeneratorRegistry: Readonly<Record<DielineArchetype, DielineGeneratorFn>> = {
-  'tuck-end': generateTuckEndBox,
+const NAMED_FEFCO_GENERATORS: Partial<Record<DielineArchetype, DielineGeneratorFn>> = {
   'fefco-0200': generateFefco0200,
   'fefco-0201': generateRsc,
   'fefco-0202': generateFefco0202,
@@ -71,6 +35,26 @@ export const DielineGeneratorRegistry: Readonly<Record<DielineArchetype, Dieline
   'fefco-0215': generateFefco0215,
 };
 
+export const DIELINE_ARCHETYPE_OPTIONS: readonly DielineArchetypeOption[] = [
+  { id: 'tuck-end', label: 'Tuck-End Box', group: 'Retail Cartons' },
+  ...FEFCO_CATALOG_ENTRIES.map((entry) => ({
+    id: entry.config.id,
+    label: entry.config.name,
+    group: entry.group,
+  })),
+];
+
+export const DielineGeneratorRegistry: Readonly<Record<DielineArchetype, DielineGeneratorFn>> = {
+  'tuck-end': generateTuckEndBox,
+  ...Object.fromEntries(
+    FEFCO_CATALOG_ENTRIES.map((entry) => [
+      entry.config.id,
+      NAMED_FEFCO_GENERATORS[entry.config.id] ??
+        ((dimensions: Dieline['dimensions']) => generateFefcoBox(entry.config, dimensions)),
+    ]),
+  ),
+} as Readonly<Record<DielineArchetype, DielineGeneratorFn>>;
+
 /**
  * Routes parametric dieline generation to the registered FEFCO/carton archetype generator.
  */
@@ -79,7 +63,7 @@ export function generateDieline(
   dimensions: Dieline['dimensions'],
 ): Dieline {
   const generator = DielineGeneratorRegistry[archetype];
-  if (typeof generator !== 'function') {
+  if (!generator) {
     throw new Error(`Unsupported dieline archetype "${String(archetype)}".`);
   }
   return generator(dimensions);
