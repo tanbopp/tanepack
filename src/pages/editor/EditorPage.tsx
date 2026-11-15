@@ -5,6 +5,9 @@ import Divider from '@mui/material/Divider';
 import FormControl from '@mui/material/FormControl';
 import InputAdornment from '@mui/material/InputAdornment';
 import InputLabel from '@mui/material/InputLabel';
+import ListItemIcon from '@mui/material/ListItemIcon';
+import ListItemText from '@mui/material/ListItemText';
+import Menu from '@mui/material/Menu';
 import MenuItem from '@mui/material/MenuItem';
 import Select, { type SelectChangeEvent } from '@mui/material/Select';
 import Slider from '@mui/material/Slider';
@@ -14,6 +17,7 @@ import {
   type ChangeEvent,
   type KeyboardEvent,
   lazy,
+  type MouseEvent as ReactMouseEvent,
   Suspense,
   useCallback,
   useEffect,
@@ -32,7 +36,8 @@ import {
   MIN_TEXT_FONT_SIZE_MM,
   useEditorStore,
 } from '@features/editor-stage';
-import { exportSvgElementToPngDataUrl, triggerPngDataUrlDownload } from '@shared/lib/exportPng';
+import { exportDielinePdf } from '@shared/lib/exportPdf';
+import { triggerPngDataUrlDownload } from '@shared/lib/exportPng';
 import { loadUploadedImageFile } from '@shared/lib/imageUpload';
 import { M3Button, M3CircularProgress, M3Icon, M3IconButton, M3TextField } from '@shared/ui';
 import { type CloudSaveStatus, useProjectPersistence } from './useProjectPersistence';
@@ -115,6 +120,7 @@ export default function EditorPage() {
   const statusDisplay = SAVE_STATUS_DISPLAY[saveStatus];
   const [selectedTool, setSelectedTool] = useState<EditorRailToolId | null>(null);
   const [viewMode, setViewMode] = useState<EditorViewMode>('2d');
+  const [exportMenuAnchorEl, setExportMenuAnchorEl] = useState<HTMLElement | null>(null);
   const [isExporting, setIsExporting] = useState(false);
   const [isEditingName, setIsEditingName] = useState(false);
   const [draftProjectName, setDraftProjectName] = useState(projectName);
@@ -122,6 +128,8 @@ export default function EditorPage() {
 
   const commitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dimensionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pending3dExportTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pending3dExportRef = useRef(false);
   const pendingDimensionDraftRef = useRef<DimensionDraftState | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const capture3dPngRef = useRef<(() => string | null) | null>(null);
@@ -188,6 +196,9 @@ export default function EditorPage() {
       }
       if (dimensionTimerRef.current !== null) {
         clearTimeout(dimensionTimerRef.current);
+      }
+      if (pending3dExportTimerRef.current !== null) {
+        clearTimeout(pending3dExportTimerRef.current);
       }
     };
   }, []);
@@ -274,6 +285,25 @@ export default function EditorPage() {
 
   const handleRegister3dCapture = useCallback((captureFn: (() => string | null) | null) => {
     capture3dPngRef.current = captureFn;
+    if (captureFn && pending3dExportRef.current) {
+      pending3dExportRef.current = false;
+      if (pending3dExportTimerRef.current !== null) {
+        clearTimeout(pending3dExportTimerRef.current);
+      }
+      pending3dExportTimerRef.current = setTimeout(() => {
+        pending3dExportTimerRef.current = null;
+        try {
+          const dataUrl = capture3dPngRef.current?.() ?? null;
+          if (dataUrl) {
+            triggerPngDataUrlDownload(dataUrl, 'untitled-box-3d.png');
+          }
+        } catch (err) {
+          console.error('Failed to export PNG snapshot:', err);
+        } finally {
+          setIsExporting(false);
+        }
+      }, 60);
+    }
   }, []);
 
   const handleRailItemClick = (toolId: EditorRailToolId) => {
@@ -415,27 +445,52 @@ export default function EditorPage() {
     navigate('/dashboard');
   };
 
-  const handleExport = async () => {
+  const handleOpenExportMenu = (event: ReactMouseEvent<HTMLElement>) => {
+    setExportMenuAnchorEl(event.currentTarget);
+  };
+
+  const handleCloseExportMenu = () => {
+    setExportMenuAnchorEl(null);
+  };
+
+  const handleExport3dPng = () => {
+    if (isExporting) {
+      return;
+    }
+    setIsExporting(true);
+
+    if (viewMode !== '3d' || !capture3dPngRef.current) {
+      pending3dExportRef.current = true;
+      handleSwitchViewMode('3d');
+      return;
+    }
+
+    try {
+      const dataUrl = capture3dPngRef.current();
+      if (dataUrl) {
+        triggerPngDataUrlDownload(dataUrl, 'untitled-box-3d.png');
+      }
+    } catch (err) {
+      console.error('Failed to export PNG snapshot:', err);
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
+  const handleExport2dPdf = async () => {
     if (isExporting) {
       return;
     }
     setIsExporting(true);
     try {
-      if (viewMode === '3d') {
-        const dataUrl = capture3dPngRef.current?.() ?? null;
-        if (dataUrl) {
-          triggerPngDataUrlDownload(dataUrl, 'untitled-box-3d.png');
-        }
-        return;
-      }
-
+      clearCommitTimer();
+      commitElements();
       const svgElement = document.querySelector('[data-testid="dieline-svg"]');
       if (svgElement instanceof SVGSVGElement) {
-        const dataUrl = await exportSvgElementToPngDataUrl(svgElement);
-        triggerPngDataUrlDownload(dataUrl, 'untitled-box-2d.png');
+        await exportDielinePdf(svgElement, dieline);
       }
     } catch (err) {
-      console.error('Failed to export PNG snapshot:', err);
+      console.error('Failed to export print-ready 2D PDF:', err);
     } finally {
       setIsExporting(false);
     }
@@ -622,13 +677,46 @@ export default function EditorPage() {
               m3Variant="filled"
               size="small"
               disabled={isExporting}
+              aria-haspopup="menu"
+              aria-expanded={exportMenuAnchorEl ? 'true' : undefined}
+              aria-controls={exportMenuAnchorEl ? 'editor-export-menu' : undefined}
               startIcon={<M3Icon name="download" size={18} />}
-              onClick={() => {
-                void handleExport();
-              }}
+              endIcon={<M3Icon name="arrow_drop_down" size={18} />}
+              onClick={handleOpenExportMenu}
             >
               Export
             </M3Button>
+            <Menu
+              id="editor-export-menu"
+              anchorEl={exportMenuAnchorEl}
+              open={Boolean(exportMenuAnchorEl)}
+              onClose={handleCloseExportMenu}
+              anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+              transformOrigin={{ vertical: 'top', horizontal: 'right' }}
+            >
+              <MenuItem
+                onClick={() => {
+                  handleCloseExportMenu();
+                  handleExport3dPng();
+                }}
+              >
+                <ListItemIcon>
+                  <M3Icon name="image" size={18} />
+                </ListItemIcon>
+                <ListItemText>Export 3D Image (PNG)</ListItemText>
+              </MenuItem>
+              <MenuItem
+                onClick={() => {
+                  handleCloseExportMenu();
+                  void handleExport2dPdf();
+                }}
+              >
+                <ListItemIcon>
+                  <M3Icon name="picture_as_pdf" size={18} />
+                </ListItemIcon>
+                <ListItemText>Export 2D Print (PDF)</ListItemText>
+              </MenuItem>
+            </Menu>
           </Box>
         </Toolbar>
       </AppBar>
@@ -708,15 +796,15 @@ export default function EditorPage() {
         {/* Center Stage Canvas */}
         <Box
           sx={{
+            position: 'relative',
             flex: 1,
             minWidth: 0,
             minHeight: 0,
             display: 'flex',
           }}
         >
-          {viewMode === '2d' ? (
-            <DielineStage />
-          ) : (
+          <DielineStage isActive={viewMode === '2d'} />
+          {viewMode === '3d' && (
             <Suspense
               fallback={
                 <Box

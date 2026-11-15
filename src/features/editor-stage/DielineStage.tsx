@@ -58,6 +58,7 @@ const CORNER_CURSORS: Record<ResizeCorner, string> = {
 
 export interface DielineStageProps {
   dimensions?: Dieline['dimensions'] | undefined;
+  isActive?: boolean | undefined;
 }
 
 type ActiveTransformInteraction =
@@ -173,7 +174,7 @@ function SelectionTransformOverlay({
   );
 }
 
-export function DielineStage({ dimensions }: DielineStageProps) {
+export function DielineStage({ dimensions, isActive = true }: DielineStageProps) {
   const stageRef = useRef<HTMLDivElement | null>(null);
   const hasAutoFittedRef = useRef(false);
   const lastAutoFittedSizeRef = useRef<{ totalWidth: number; totalHeight: number } | null>(null);
@@ -379,6 +380,10 @@ export function DielineStage({ dimensions }: DielineStageProps) {
 
   // Track Spacebar hold globally while avoiding conflict with focused form controls
   useEffect(() => {
+    if (!isActive) {
+      return;
+    }
+
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.code !== 'Space' || isEditableTarget(event.target)) {
         return;
@@ -405,16 +410,17 @@ export function DielineStage({ dimensions }: DielineStageProps) {
     window.addEventListener('blur', handleWindowBlur);
 
     return () => {
+      setIsSpacePressed(false);
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
       window.removeEventListener('blur', handleWindowBlur);
     };
-  }, []);
+  }, [isActive]);
 
   // Attach non-passive native wheel listener so zoom prevents page scrolling/pinch without warnings
   useEffect(() => {
     const stageEl = stageRef.current;
-    if (!stageEl) {
+    if (!stageEl || !isActive) {
       return;
     }
 
@@ -446,7 +452,7 @@ export function DielineStage({ dimensions }: DielineStageProps) {
     return () => {
       stageEl.removeEventListener('wheel', handleWheel);
     };
-  }, []);
+  }, [isActive]);
 
   // Track viewport pan drag on window until mouseup
   useEffect(() => {
@@ -731,10 +737,11 @@ export function DielineStage({ dimensions }: DielineStageProps) {
       ref={stageRef}
       data-testid="dieline-stage"
       aria-label="2D Dieline Stage"
-      onMouseDown={handleStageMouseDown}
+      aria-hidden={!isActive}
+      onMouseDown={isActive ? handleStageMouseDown : undefined}
       sx={{
-        position: 'relative',
-        flex: 1,
+        position: isActive ? 'relative' : 'absolute',
+        ...(isActive ? { flex: 1 } : { inset: 0, zIndex: -1 }),
         minWidth: 0,
         minHeight: 0,
         overflow: 'hidden',
@@ -742,6 +749,8 @@ export function DielineStage({ dimensions }: DielineStageProps) {
         touchAction: 'none',
         cursor: cursorStyle,
         backgroundColor: 'var(--md-sys-color-surface-container)',
+        visibility: isActive ? 'visible' : 'hidden',
+        pointerEvents: isActive ? 'auto' : 'none',
       }}
     >
       <div
@@ -924,102 +933,106 @@ export function DielineStage({ dimensions }: DielineStageProps) {
         </svg>
       </div>
 
-      {/* Subtle dimensions + interaction hint chip */}
-      <Box
-        sx={{
-          position: 'absolute',
-          left: 16,
-          bottom: 16,
-          zIndex: 10,
-          px: 1.5,
-          py: 0.75,
-          borderRadius: '9999px',
-          backgroundColor: 'var(--md-sys-color-surface-container-high)',
-          border: '1px solid var(--md-sys-color-outline-variant)',
-          pointerEvents: 'none',
-          display: { xs: 'none', sm: 'flex' },
-          alignItems: 'center',
-          gap: 1,
-        }}
-      >
-        <Typography variant="labelSmall" color="text.secondary">
-          {dieline.totalWidth} × {dieline.totalHeight} mm • Space + Drag to pan • Scroll to zoom
-        </Typography>
-      </Box>
+      {isActive && (
+        <>
+          {/* Subtle dimensions + interaction hint chip */}
+          <Box
+            sx={{
+              position: 'absolute',
+              left: 16,
+              bottom: 16,
+              zIndex: 10,
+              px: 1.5,
+              py: 0.75,
+              borderRadius: '9999px',
+              backgroundColor: 'var(--md-sys-color-surface-container-high)',
+              border: '1px solid var(--md-sys-color-outline-variant)',
+              pointerEvents: 'none',
+              display: { xs: 'none', sm: 'flex' },
+              alignItems: 'center',
+              gap: 1,
+            }}
+          >
+            <Typography variant="labelSmall" color="text.secondary">
+              {dieline.totalWidth} × {dieline.totalHeight} mm • Space + Drag to pan • Scroll to zoom
+            </Typography>
+          </Box>
 
-      {/* M3 Viewport controls pill (Zoom & Fit to Screen) */}
-      <Box
-        onMouseDown={(event) => event.stopPropagation()}
-        sx={{
-          position: 'absolute',
-          right: 16,
-          bottom: 16,
-          zIndex: 10,
-          display: 'flex',
-          alignItems: 'center',
-          gap: 0.5,
-          px: 1,
-          py: 0.5,
-          borderRadius: '9999px',
-          backgroundColor: 'var(--md-sys-color-surface-container-high)',
-          border: '1px solid var(--md-sys-color-outline-variant)',
-          boxShadow: HUD_ELEVATION_SHADOW,
-        }}
-      >
-        <M3IconButton
-          icon="zoom_out"
-          label="Zoom out"
-          size="small"
-          iconSize={20}
-          disabled={viewport.zoom <= MIN_STAGE_ZOOM}
-          onClick={(event) => {
-            event.currentTarget.blur();
-            zoomAroundStageCenter(0.8);
-          }}
-        />
-        <M3Button
-          m3Variant="text"
-          size="small"
-          aria-label="Reset zoom to 100%"
-          onClick={(event) => {
-            event.currentTarget.blur();
-            handleResetToActualSize();
-          }}
-          sx={{
-            minWidth: 52,
-            minHeight: 32,
-            px: 1,
-            color: 'var(--md-sys-color-on-surface)',
-            fontVariantNumeric: 'tabular-nums',
-          }}
-        >
-          {zoomPercent}%
-        </M3Button>
-        <M3IconButton
-          icon="zoom_in"
-          label="Zoom in"
-          size="small"
-          iconSize={20}
-          disabled={viewport.zoom >= MAX_STAGE_ZOOM}
-          onClick={(event) => {
-            event.currentTarget.blur();
-            zoomAroundStageCenter(1.25);
-          }}
-        />
-        <Divider orientation="vertical" flexItem sx={{ my: 0.75, mx: 0.25 }} />
-        <M3Button
-          m3Variant="tonal"
-          size="small"
-          startIcon={<M3Icon name="fit_screen" size={18} />}
-          onClick={(event) => {
-            event.currentTarget.blur();
-            handleFitToScreen();
-          }}
-          sx={{ minHeight: 32, px: 1.75 }}
-        >
-          Fit to Screen
-        </M3Button>
-      </Box>
+          {/* M3 Viewport controls pill (Zoom & Fit to Screen) */}
+          <Box
+            onMouseDown={(event) => event.stopPropagation()}
+            sx={{
+              position: 'absolute',
+              right: 16,
+              bottom: 16,
+              zIndex: 10,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 0.5,
+              px: 1,
+              py: 0.5,
+              borderRadius: '9999px',
+              backgroundColor: 'var(--md-sys-color-surface-container-high)',
+              border: '1px solid var(--md-sys-color-outline-variant)',
+              boxShadow: HUD_ELEVATION_SHADOW,
+            }}
+          >
+            <M3IconButton
+              icon="zoom_out"
+              label="Zoom out"
+              size="small"
+              iconSize={20}
+              disabled={viewport.zoom <= MIN_STAGE_ZOOM}
+              onClick={(event) => {
+                event.currentTarget.blur();
+                zoomAroundStageCenter(0.8);
+              }}
+            />
+            <M3Button
+              m3Variant="text"
+              size="small"
+              aria-label="Reset zoom to 100%"
+              onClick={(event) => {
+                event.currentTarget.blur();
+                handleResetToActualSize();
+              }}
+              sx={{
+                minWidth: 52,
+                minHeight: 32,
+                px: 1,
+                color: 'var(--md-sys-color-on-surface)',
+                fontVariantNumeric: 'tabular-nums',
+              }}
+            >
+              {zoomPercent}%
+            </M3Button>
+            <M3IconButton
+              icon="zoom_in"
+              label="Zoom in"
+              size="small"
+              iconSize={20}
+              disabled={viewport.zoom >= MAX_STAGE_ZOOM}
+              onClick={(event) => {
+                event.currentTarget.blur();
+                zoomAroundStageCenter(1.25);
+              }}
+            />
+            <Divider orientation="vertical" flexItem sx={{ my: 0.75, mx: 0.25 }} />
+            <M3Button
+              m3Variant="tonal"
+              size="small"
+              startIcon={<M3Icon name="fit_screen" size={18} />}
+              onClick={(event) => {
+                event.currentTarget.blur();
+                handleFitToScreen();
+              }}
+              sx={{ minHeight: 32, px: 1.75 }}
+            >
+              Fit to Screen
+            </M3Button>
+          </Box>
+        </>
+      )}
     </Box>
   );
 }

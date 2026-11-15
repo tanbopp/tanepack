@@ -15,10 +15,15 @@ import { resetProjectPersistenceTracking } from './useProjectPersistence';
 const MOCK_3D_PNG_DATA_URL = 'data:image/png;base64,MOCK3DSNAPSHOT';
 const TEST_PROJECT_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 
-const { mockFetchProject, mockSaveProject } = vi.hoisted(() => ({
+const { mockExportDielinePdf, mockFetchProject, mockSaveProject } = vi.hoisted(() => ({
+  mockExportDielinePdf: vi.fn<() => Promise<Uint8Array>>(),
   mockFetchProject: vi.fn<(projectId: string) => Promise<Project | null>>(),
   mockSaveProject:
     vi.fn<(projectId: string, projectData: Project, userId: string) => Promise<Project>>(),
+}));
+
+vi.mock('@shared/lib/exportPdf', () => ({
+  exportDielinePdf: mockExportDielinePdf,
 }));
 
 vi.mock('@shared/lib/supabase', () => ({
@@ -104,6 +109,8 @@ beforeEach(() => {
   window.localStorage.clear();
   resetProjectPersistenceTracking();
   useEditorStore.getState().reset();
+  mockExportDielinePdf.mockReset();
+  mockExportDielinePdf.mockResolvedValue(new Uint8Array([37, 80, 68, 70]));
   mockFetchProject.mockReset();
   mockFetchProject.mockResolvedValue(null);
   mockSaveProject.mockReset();
@@ -223,7 +230,7 @@ describe('EditorPage', () => {
     expect(renderedImg).not.toBeNull();
     expect(renderedImg?.getAttribute('href')).toMatch(/^data:image\/png;base64,/);
 
-    // Switch to 3D Preview and click Export -> triggers PNG Data URL download from R3F capture
+    // Switch to 3D Preview, open Export menu, and choose Export 3D Image (PNG)
     fireEvent.click(screen.getByRole('button', { name: '3D Preview' }));
     await waitFor(() => {
       expect(screen.getByTestId('box-viewer-3d')).toBeTruthy();
@@ -231,6 +238,7 @@ describe('EditorPage', () => {
     expect(screen.getByTestId('box-viewer-3d').getAttribute('data-committed-images')).toBe('1');
 
     fireEvent.click(screen.getByRole('button', { name: /Export/i }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Export 3D Image (PNG)' }));
     await waitFor(() => {
       expect(anchorClickSpy).toHaveBeenCalledTimes(1);
     });
@@ -461,5 +469,28 @@ describe('EditorPage', () => {
     expect(screen.getByTestId('box-viewer-3d').getAttribute('data-dieline-total-width')).toBe(
       '417',
     );
+  });
+
+  it('opens Export dropdown with 3D PNG and 2D Print PDF options and exports print PDF from 2D stage', async () => {
+    renderEditorPage();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add Text' }));
+    fireEvent.click(screen.getByRole('button', { name: /Export/i }));
+
+    expect(screen.getByRole('menuitem', { name: 'Export 3D Image (PNG)' })).toBeTruthy();
+    const exportPdfItem = screen.getByRole('menuitem', { name: 'Export 2D Print (PDF)' });
+    fireEvent.click(exportPdfItem);
+
+    await waitFor(() => {
+      expect(mockExportDielinePdf).toHaveBeenCalledTimes(1);
+    });
+
+    const [calledSvg, calledDieline] = mockExportDielinePdf.mock.calls[0] as unknown as [
+      SVGSVGElement,
+      Dieline,
+    ];
+    expect(calledSvg).toBe(screen.getByTestId('dieline-svg'));
+    expect(calledDieline.totalWidth).toBe(317);
+    expect(calledDieline.totalHeight).toBe(231.5);
   });
 });
