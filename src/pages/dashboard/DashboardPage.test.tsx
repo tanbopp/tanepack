@@ -80,6 +80,10 @@ function renderDashboard() {
       >
         <Routes>
           <Route path="/dashboard" element={<DashboardPage />} />
+          <Route
+            path="/templates"
+            element={<div data-testid="templates-route">Templates Catalog</div>}
+          />
           <Route path="/editor" element={<EditorRouteSpy />} />
           <Route path="/login" element={<div data-testid="login-route">Login Page</div>} />
           <Route path="/register" element={<div data-testid="register-route">Register Page</div>} />
@@ -215,6 +219,17 @@ describe('DashboardPage', () => {
     await waitFor(() => {
       const spy = screen.getByTestId('editor-route');
       expect(spy.getAttribute('data-search')).toBe('?template=coffee-box');
+    });
+  });
+
+  it('navigates to /templates from Browse Catalog button', async () => {
+    mockFetchUserProjects.mockResolvedValue([]);
+
+    renderDashboard();
+
+    fireEvent.click(screen.getByRole('button', { name: /Browse Catalog/i }));
+    await waitFor(() => {
+      expect(screen.getByTestId('templates-route')).toBeTruthy();
     });
   });
 });

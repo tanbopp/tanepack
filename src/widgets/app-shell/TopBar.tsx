@@ -4,7 +4,7 @@ import Box from '@mui/material/Box';
 import Toolbar from '@mui/material/Toolbar';
 import Typography from '@mui/material/Typography';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { M3IconButton } from '@shared/ui';
+import { M3Button, M3Icon, M3IconButton } from '@shared/ui';
 import { TopBarAccountActions } from './TopBarAccountActions';
 
 export interface TopBarProps {
@@ -51,6 +51,15 @@ export function TopBar({ title = 'Tanepack', showBackButton = false }: TopBarPro
         </Box>
 
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexShrink: 0 }}>
+          <M3Button
+            m3Variant={location.pathname === '/templates' ? 'tonal' : 'text'}
+            size="small"
+            startIcon={<M3Icon name="grid_view" size={18} />}
+            onClick={() => navigate('/templates')}
+            sx={{ minHeight: 34, px: 1.5, flexShrink: 0 }}
+          >
+            Templates
+          </M3Button>
           <TopBarAccountActions hideLoginButton={isAuthPage} />
         </Box>
       </Toolbar>

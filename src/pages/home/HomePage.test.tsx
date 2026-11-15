@@ -41,6 +41,7 @@ function renderHomePage(initialEntry = '/') {
       >
         <Routes>
           <Route path="/" element={<HomePage />} />
+          <Route path="/templates" element={<div>Templates Catalog Route</div>} />
           <Route path="/editor" element={<div>Editor Route</div>} />
           <Route path="/dashboard" element={<div>Dashboard Route</div>} />
           <Route path="/login" element={<div>Login Route</div>} />
@@ -86,7 +87,12 @@ describe('HomePage landing experience', () => {
     expect(container.querySelectorAll('svg').length).toBeGreaterThanOrEqual(2);
   });
 
-  it('navigates cleanly to /editor when Start Designing is clicked', () => {
+  it('navigates cleanly to /editor on Start Designing and to /templates on Browse Templates', () => {
+    renderHomePage();
+    fireEvent.click(screen.getByRole('button', { name: /Browse Templates/i }));
+    expect(screen.getByText('Templates Catalog Route')).toBeTruthy();
+
+    cleanup();
     renderHomePage();
     fireEvent.click(screen.getByRole('button', { name: /Start Designing/i }));
     expect(screen.getByText('Editor Route')).toBeTruthy();

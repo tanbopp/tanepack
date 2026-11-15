@@ -10,7 +10,12 @@ import {
   fetchProject,
   saveProject,
 } from '@entities/design-document';
-import type { Dieline } from '@entities/dieline';
+import {
+  DIELINE_ARCHETYPE_OPTIONS,
+  type Dieline,
+  type DielineArchetype,
+  DielineGeneratorRegistry,
+} from '@entities/dieline';
 import { findTemplateById } from '@entities/template';
 import { env } from '@shared/config/env';
 import { createUuid, isValidUuid } from '@shared/lib/id';
@@ -54,12 +59,58 @@ export function resetProjectPersistenceTracking(): void {
   lastEditorProjectId = null;
 }
 
+function parseArchetypeParam(raw: string | null): DielineArchetype | null {
+  if (!raw) {
+    return null;
+  }
+  return Object.prototype.hasOwnProperty.call(DielineGeneratorRegistry, raw)
+    ? (raw as DielineArchetype)
+    : null;
+}
+
+function parsePositiveDimensionParam(raw: string | null): number | null {
+  if (raw === null) {
+    return null;
+  }
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) {
+    return null;
+  }
+  const parsed = Number(trimmed);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function resolveInitialDeepLinkName(
+  projectId: string,
+  urlProjectId: string | null,
+  urlTemplateId: string | null,
+  urlArchetypeParam: string | null,
+): { projectId: string; name: string } | null {
+  if (isValidUuid(urlProjectId)) {
+    return null;
+  }
+  const matchedTemplate = findTemplateById(urlTemplateId);
+  if (matchedTemplate) {
+    return { projectId, name: matchedTemplate.name };
+  }
+  const parsedArchetype = parseArchetypeParam(urlArchetypeParam);
+  if (!parsedArchetype) {
+    return null;
+  }
+  const label = DIELINE_ARCHETYPE_OPTIONS.find((option) => option.id === parsedArchetype)?.label;
+  return label ? { projectId, name: label } : null;
+}
+
 /** Coordinates Supabase project hydration and 2s debounced auto-save for authenticated users, with Guest Mode fallback. */
 export function useProjectPersistence(): ProjectPersistenceState {
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
   const urlProjectId = searchParams.get('id');
   const urlTemplateId = searchParams.get('template');
+  const urlArchetypeParam = searchParams.get('archetype');
+  const urlLengthParam = searchParams.get('l');
+  const urlWidthParam = searchParams.get('w');
+  const urlHeightParam = searchParams.get('h');
   const [fallbackProjectId] = useState<string>(() => createUuid());
   const projectId = isValidUuid(urlProjectId) ? urlProjectId : fallbackProjectId;
 
@@ -74,14 +125,15 @@ export function useProjectPersistence(): ProjectPersistenceState {
   const dieline = useEditorStore((state) => state.dieline);
   const committedElements = useEditorStore((state) => state.committedElements);
 
-  const [nameOverride, setNameOverride] = useState<{ projectId: string; name: string } | null>(
-    null,
+  const [nameOverride, setNameOverride] = useState<{ projectId: string; name: string } | null>(() =>
+    resolveInitialDeepLinkName(projectId, urlProjectId, urlTemplateId, urlArchetypeParam),
   );
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const projectCreatedAtRef = useRef(new Date().toISOString());
   const insideElementsRef = useRef<DesignElement[]>([]);
   const hydratedProjectIdRef = useRef<string | null>(null);
   const appliedTemplateKeyRef = useRef<string | null>(null);
+  const appliedDeepLinkKeyRef = useRef<string | null>(null);
   const syncedSnapshotRef = useRef<EditorSnapshot>({
     dieline,
     committedElements,
@@ -95,7 +147,7 @@ export function useProjectPersistence(): ProjectPersistenceState {
     committedElements,
   });
 
-  // Reset store on project switch, apply ?template= for new projects, and sync valid UUID into ?id=
+  // Reset store on project switch, apply ?template= or ?archetype=&l=&w=&h= deep-links, and sync valid ?id= UUID
   useEffect(() => {
     if (lastEditorProjectId !== null && lastEditorProjectId !== projectId) {
       useEditorStore.getState().reset();
@@ -110,35 +162,84 @@ export function useProjectPersistence(): ProjectPersistenceState {
         committedElements: freshState.committedElements,
       };
       hydratedProjectIdRef.current = null;
+      appliedTemplateKeyRef.current = null;
+      appliedDeepLinkKeyRef.current = null;
       projectCreatedAtRef.current = new Date().toISOString();
       insideElementsRef.current = [];
     }
     lastEditorProjectId = projectId;
 
-    const matchedTemplate = !isValidUuid(urlProjectId)
-      ? findTemplateById(urlTemplateId)
-      : undefined;
+    const isNewProject = !isValidUuid(urlProjectId);
+    const matchedTemplate = isNewProject ? findTemplateById(urlTemplateId) : undefined;
     if (matchedTemplate) {
       const applyKey = `${projectId}:${matchedTemplate.id}`;
       if (appliedTemplateKeyRef.current !== applyKey) {
         appliedTemplateKeyRef.current = applyKey;
         useEditorStore.getState().applyTemplate(matchedTemplate);
-        setNameOverride({ projectId, name: matchedTemplate.name });
+      }
+    } else if (isNewProject) {
+      const parsedArchetype = parseArchetypeParam(urlArchetypeParam);
+      const parsedL = parsePositiveDimensionParam(urlLengthParam);
+      const parsedW = parsePositiveDimensionParam(urlWidthParam);
+      const parsedH = parsePositiveDimensionParam(urlHeightParam);
+      const hasDeepLinkValues =
+        parsedArchetype !== null || parsedL !== null || parsedW !== null || parsedH !== null;
+
+      if (hasDeepLinkValues) {
+        const deepLinkKey = `${projectId}:${parsedArchetype ?? ''}:${parsedL ?? ''}:${parsedW ?? ''}:${parsedH ?? ''}`;
+        if (appliedDeepLinkKeyRef.current !== deepLinkKey) {
+          appliedDeepLinkKeyRef.current = deepLinkKey;
+          const store = useEditorStore.getState();
+          if (parsedArchetype !== null) {
+            store.setArchetype(parsedArchetype);
+          }
+          if (parsedL !== null || parsedW !== null || parsedH !== null) {
+            const currentDims = useEditorStore.getState().dimensions;
+            store.setDimensions(
+              parsedL ?? currentDims.length,
+              parsedW ?? currentDims.width,
+              parsedH ?? currentDims.height,
+            );
+          }
+        }
       }
     }
 
-    if (urlProjectId !== projectId || (matchedTemplate && urlTemplateId !== null)) {
+    const hasDeepLinkQueryParams =
+      urlArchetypeParam !== null ||
+      urlLengthParam !== null ||
+      urlWidthParam !== null ||
+      urlHeightParam !== null;
+
+    if (
+      urlProjectId !== projectId ||
+      (matchedTemplate && urlTemplateId !== null) ||
+      (isNewProject && hasDeepLinkQueryParams)
+    ) {
       setSearchParams(
         (prev) => {
           const next = new URLSearchParams(prev);
           next.set('id', projectId);
           next.delete('template');
+          next.delete('archetype');
+          next.delete('l');
+          next.delete('w');
+          next.delete('h');
           return next;
         },
         { replace: true },
       );
     }
-  }, [projectId, setSearchParams, urlProjectId, urlTemplateId]);
+  }, [
+    projectId,
+    setSearchParams,
+    urlArchetypeParam,
+    urlHeightParam,
+    urlLengthParam,
+    urlProjectId,
+    urlTemplateId,
+    urlWidthParam,
+  ]);
 
   const projectQuery = useQuery({
     queryKey: ['project', authUserId, projectId],

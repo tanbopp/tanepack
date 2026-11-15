@@ -3,7 +3,7 @@ import type { Session, User } from '@supabase/supabase-js';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { useEffect } from 'react';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useEditorStore } from '@features/editor-stage';
 import type { DesignElement, Project } from '@entities/design-document';
@@ -110,6 +110,16 @@ function makeAuthState(isAuthenticated = true): UseAuthResult {
   };
 }
 
+function EditorWithLocationSpy() {
+  const location = useLocation();
+  return (
+    <>
+      <div data-testid="editor-location-search" data-search={location.search} />
+      <EditorPage />
+    </>
+  );
+}
+
 function renderEditorPage(initialEntry = '/editor') {
   const queryClient = new QueryClient({
     defaultOptions: {
@@ -125,7 +135,7 @@ function renderEditorPage(initialEntry = '/editor') {
         future={{ v7_startTransition: true, v7_relativeSplatPath: true }}
       >
         <Routes>
-          <Route path="/editor" element={<EditorPage />} />
+          <Route path="/editor" element={<EditorWithLocationSpy />} />
           <Route path="/login" element={<div data-testid="login-route">Login Page</div>} />
         </Routes>
       </MemoryRouter>
@@ -631,5 +641,75 @@ describe('EditorPage', () => {
     fireEvent.click(screen.getByRole('option', { name: 'FEFCO 0203 (Full Overlap)' }));
     expect(useEditorStore.getState().archetype).toBe('fefco-0203');
     expect(screen.getByTestId('dieline-svg').getAttribute('viewBox')).toBe('0 0 1037 551.5');
+  });
+
+  it('initializes archetype and dimensions from ?archetype=&l=&w=&h= deep link, swaps URL to ?id=<uuid>, saves, and reloads', async () => {
+    renderEditorPage('/editor?archetype=fefco-0203&l=300&w=200&h=150');
+
+    await waitFor(() => {
+      const search = screen.getByTestId('editor-location-search').getAttribute('data-search') ?? '';
+      expect(search.startsWith('?id=')).toBe(true);
+    });
+
+    const search = screen.getByTestId('editor-location-search').getAttribute('data-search') ?? '';
+    const assignedId = new URLSearchParams(search).get('id') ?? '';
+    expect(isValidUuid(assignedId)).toBe(true);
+    expect(new URLSearchParams(search).has('archetype')).toBe(false);
+    expect(new URLSearchParams(search).has('l')).toBe(false);
+
+    expect(useEditorStore.getState().archetype).toBe('fefco-0203');
+    expect(useEditorStore.getState().dimensions).toMatchObject({
+      length: 300,
+      width: 200,
+      height: 150,
+    });
+    expect(screen.getByRole('combobox', { name: 'Box Type' }).textContent).toBe(
+      'FEFCO 0203 (Full Overlap)',
+    );
+    expect(screen.getByTestId('box-dimensions-summary').textContent).toBe('300 × 200 × 150 mm');
+    expect(screen.getByTestId('dieline-svg').getAttribute('viewBox')).toBe('0 0 1037 551.5');
+
+    await waitFor(() => {
+      expect(mockFetchProject).toHaveBeenCalledWith(assignedId);
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    vi.useFakeTimers();
+    fireEvent.click(screen.getByRole('button', { name: 'Add Text' }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2050);
+    });
+
+    expect(mockSaveProject).toHaveBeenCalled();
+    const savedCall = mockSaveProject.mock.calls[mockSaveProject.mock.calls.length - 1];
+    const savedProject = savedCall?.[1];
+    expect(savedProject?.id).toBe(assignedId);
+    expect(savedProject?.dieline.archetype).toBe('fefco-0203');
+    expect(savedProject?.dieline.dimensions).toMatchObject({
+      length: 300,
+      width: 200,
+      height: 150,
+    });
+    expect(savedProject?.layers.outside).toHaveLength(1);
+
+    // Simulate browser page reload on /editor?id=<uuid>
+    vi.useRealTimers();
+    cleanup();
+    resetProjectPersistenceTracking();
+    useEditorStore.getState().reset();
+    mockFetchProject.mockResolvedValueOnce(savedProject ?? null);
+
+    renderEditorPage(`/editor?id=${assignedId}`);
+    await waitFor(() => {
+      expect(screen.getByTestId('dieline-svg').getAttribute('viewBox')).toBe('0 0 1037 551.5');
+    });
+    expect(screen.getByRole('combobox', { name: 'Box Type' }).textContent).toBe(
+      'FEFCO 0203 (Full Overlap)',
+    );
+    expect(
+      screen.getByTestId('dieline-svg').querySelector('[data-layer="artwork"] text')?.textContent,
+    ).toBe('Tanepack');
   });
 });

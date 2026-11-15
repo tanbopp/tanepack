@@ -25,6 +25,7 @@ function renderTopBar(initialEntry = '/dashboard') {
       >
         <Routes>
           <Route path="/dashboard" element={<TopBar title="Tanepack — My Designs" />} />
+          <Route path="/templates" element={<TopBar title="Tanepack — Packaging Models" />} />
           <Route path="/login" element={<TopBar title="Tanepack" />} />
         </Routes>
       </MemoryRouter>
@@ -87,5 +88,23 @@ describe('TopBar account controls', () => {
     await waitFor(() => {
       expect(signOut).toHaveBeenCalledTimes(1);
     });
+  });
+
+  it('navigates cleanly to /templates when clicking Templates button in TopBar', () => {
+    mockUseAuth.mockReturnValue({
+      user: null,
+      session: null,
+      isLoading: false,
+      isAuthenticated: false,
+      isConfigured: true,
+      error: null,
+      signIn: vi.fn(),
+      signUp: vi.fn(),
+      signOut: vi.fn(),
+    });
+
+    renderTopBar('/dashboard');
+    fireEvent.click(screen.getByRole('button', { name: 'Templates' }));
+    expect(screen.getByText('Tanepack — Packaging Models')).toBeTruthy();
   });
 });

@@ -7,6 +7,7 @@ import { AppShell } from '@widgets/app-shell/AppShell';
 import { M3CircularProgress } from '@shared/ui';
 
 const HomePage = lazy(() => import('@pages/home/HomePage'));
+const TemplatesPage = lazy(() => import('@pages/templates/TemplatesPage'));
 const DashboardPage = lazy(() => import('@pages/dashboard/DashboardPage'));
 const EditorPage = lazy(() => import('@pages/editor/EditorPage'));
 const LoginPage = lazy(() => import('@pages/auth/LoginPage'));
@@ -23,6 +24,11 @@ const routeFallback = <M3CircularProgress label="Loading Tanepack..." />;
 
 const dashboardHandle: RouteMetaHandle = {
   title: 'Tanepack — My Designs',
+  showBackButton: true,
+};
+
+const templatesHandle: RouteMetaHandle = {
+  title: 'Tanepack — Packaging Models',
   showBackButton: true,
 };
 
@@ -62,6 +68,15 @@ const router = createBrowserRouter(
             </Suspense>
           ),
           handle: homeHandle,
+        },
+        {
+          path: ROUTES.TEMPLATES,
+          element: (
+            <Suspense fallback={routeFallback}>
+              <TemplatesPage />
+            </Suspense>
+          ),
+          handle: templatesHandle,
         },
         {
           path: ROUTES.DASHBOARD,

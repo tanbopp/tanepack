@@ -1,6 +1,7 @@
 // Typed route constants and RouteHandle definitions for Tanepack
 export const ROUTES = {
   HOME: '/',
+  TEMPLATES: '/templates',
   DASHBOARD: '/dashboard',
   EDITOR: '/editor',
   LOGIN: '/login',

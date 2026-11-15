@@ -43,6 +43,7 @@ const FEATURES: readonly FeatureItem[] = [
 ];
 
 const FOOTER_LINKS: ReadonlyArray<{ label: string; to: string }> = [
+  { label: 'Templates', to: '/templates' },
   { label: 'Editor', to: '/editor' },
   { label: 'My Designs', to: '/dashboard' },
   { label: 'Log In', to: '/login' },
@@ -310,6 +311,19 @@ export default function HomePage() {
           <Box
             sx={{ display: 'flex', alignItems: 'center', gap: { xs: 1, sm: 1.25 }, minWidth: 0 }}
           >
+            <M3Button
+              m3Variant="text"
+              size="small"
+              onClick={() => navigate('/templates')}
+              sx={{
+                minHeight: 36,
+                px: { xs: 1.25, sm: 1.75 },
+                whiteSpace: 'nowrap',
+                color: 'var(--md-sys-color-on-surface)',
+              }}
+            >
+              Templates
+            </M3Button>
             {isAuthenticated && user ? (
               <>
                 <M3Button
@@ -432,7 +446,15 @@ export default function HomePage() {
                 >
                   Start Designing
                 </M3Button>
-                <M3Button m3Variant="tonal" size="large" onClick={() => navigate('/dashboard')}>
+                <M3Button
+                  m3Variant="tonal"
+                  size="large"
+                  startIcon={<M3Icon name="grid_view" size={20} />}
+                  onClick={() => navigate('/templates')}
+                >
+                  Browse Templates
+                </M3Button>
+                <M3Button m3Variant="outlined" size="large" onClick={() => navigate('/dashboard')}>
                   My Designs
                 </M3Button>
               </Box>
