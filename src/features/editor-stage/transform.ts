@@ -1,5 +1,5 @@
 // Pure SVG-mm geometry helpers for element selection frames, rotation (atan2), and corner resize
-import type { DesignElement, ImageElement, TextElement } from '@entities/design-document';
+import type { DesignElement, TextElement } from '@entities/design-document';
 import { roundMm, type SvgPathBoundsMm } from '@entities/dieline';
 import type { Point } from '@entities/dieline/types';
 import { pxToMm } from '@shared/lib/units';
@@ -192,7 +192,7 @@ function computeUniformScaleFromCornerDrag(
  * - For text: scales fontSize proportionally within [4mm, 72mm] alongside box width/height.
  */
 export function computeCornerResizePatch(
-  element: TextElement | ImageElement,
+  element: DesignElement,
   corner: ResizeCorner,
   pointerMm: Point,
   start: ResizeStartSnapshot,

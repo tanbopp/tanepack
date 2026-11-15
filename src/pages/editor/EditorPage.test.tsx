@@ -493,4 +493,65 @@ describe('EditorPage', () => {
     expect(calledDieline.totalWidth).toBe(317);
     expect(calledDieline.totalHeight).toBe(231.5);
   });
+
+  it('opens Left Rail Templates drawer, applies Matcha Box preset cleanly to 2D & 3D, and closes drawer', async () => {
+    renderEditorPage();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Templates' }));
+
+    const drawer = screen.getByTestId('templates-drawer');
+    expect(within(drawer).getByText('Coffee Box')).toBeTruthy();
+    expect(within(drawer).getByText('Matcha Box')).toBeTruthy();
+    expect(within(drawer).getByText('Pastry Box')).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId('template-card-matcha-box'));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('templates-drawer')).toBeNull();
+    });
+
+    expect(useEditorStore.getState().dimensions).toMatchObject({
+      length: 80,
+      width: 80,
+      height: 80,
+    });
+    expect(screen.getByTestId('box-dimensions-summary').textContent).toBe('80 × 80 × 80 mm');
+
+    const svg = screen.getByTestId('dieline-svg');
+    const artworkTexts = Array.from(svg.querySelectorAll('[data-layer="artwork"] text')).map(
+      (node) => node.textContent,
+    );
+    expect(artworkTexts).toContain('Matcha');
+    expect(svg.querySelectorAll('[data-layer="artwork"] rect').length).toBeGreaterThanOrEqual(1);
+
+    // Committed immediately to 3D Preview without needing extra Edit commits
+    fireEvent.click(screen.getByRole('button', { name: '3D Preview' }));
+    await waitFor(() => {
+      expect(screen.getByTestId('box-viewer-3d')).toBeTruthy();
+    });
+    expect(screen.getByTestId('box-viewer-3d').getAttribute('data-committed-text')).toContain(
+      'Matcha',
+    );
+    expect(screen.getByTestId('box-viewer-3d').getAttribute('data-dieline-length')).toBe('80');
+  });
+
+  it('reads ?template=coffee-box query param on mount and applies Coffee Box immediately', async () => {
+    renderEditorPage('/editor?template=coffee-box');
+
+    await waitFor(() => {
+      expect(screen.getByText('Coffee Box')).toBeTruthy();
+    });
+
+    expect(useEditorStore.getState().dimensions).toMatchObject({
+      length: 100,
+      width: 50,
+      height: 100,
+    });
+    const svg = screen.getByTestId('dieline-svg');
+    const artworkTexts = Array.from(svg.querySelectorAll('[data-layer="artwork"] text')).map(
+      (node) => node.textContent,
+    );
+    expect(artworkTexts).toContain('Tanepack Coffee');
+    expect(svg.querySelector('[data-layer="artwork"] ellipse')).not.toBeNull();
+  });
 });

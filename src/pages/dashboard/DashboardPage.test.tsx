@@ -1,7 +1,7 @@
 // Unit tests for DashboardPage M3 project grid, thumbnail preview, Create New, and Open actions
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ProjectSummary } from '@entities/design-document';
 import { generateTuckEndBox } from '@entities/dieline';
@@ -27,6 +27,15 @@ vi.mock('@entities/design-document', async (importOriginal) => {
   };
 });
 
+function EditorRouteSpy() {
+  const location = useLocation();
+  return (
+    <div data-testid="editor-route" data-search={location.search}>
+      Editor Mock
+    </div>
+  );
+}
+
 function renderDashboard() {
   const queryClient = new QueryClient({
     defaultOptions: {
@@ -42,7 +51,7 @@ function renderDashboard() {
       >
         <Routes>
           <Route path="/dashboard" element={<DashboardPage />} />
-          <Route path="/editor" element={<div data-testid="editor-route">Editor Mock</div>} />
+          <Route path="/editor" element={<EditorRouteSpy />} />
         </Routes>
       </MemoryRouter>
     </QueryClientProvider>,
@@ -148,6 +157,20 @@ describe('DashboardPage', () => {
 
     await waitFor(() => {
       expect(screen.getByTestId('editor-route')).toBeTruthy();
+    });
+  });
+
+  it('navigates to /editor?template=coffee-box from Start from Template menu', async () => {
+    mockFetchUserProjects.mockResolvedValue([]);
+
+    renderDashboard();
+
+    fireEvent.click(screen.getByRole('button', { name: /Start from Template/i }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /Coffee Box/i }));
+
+    await waitFor(() => {
+      const spy = screen.getByTestId('editor-route');
+      expect(spy.getAttribute('data-search')).toBe('?template=coffee-box');
     });
   });
 });

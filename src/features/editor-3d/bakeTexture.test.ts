@@ -1,7 +1,12 @@
 // Unit tests for per-face 2D canvas texture baking, sizing clamp, text, and raster images
 import * as THREE from 'three';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { DesignElement, ImageElement, TextElement } from '@entities/design-document';
+import type {
+  DesignElement,
+  ImageElement,
+  ShapeElement,
+  TextElement,
+} from '@entities/design-document';
 import { computeSvgPathBoundsMm, generateTuckEndBox } from '@entities/dieline';
 import {
   bakeFaceTexture,
@@ -242,5 +247,84 @@ describe('bakeTexture', () => {
     expect(buildFaceBakeSignature(right, baseElements)).toBe(
       buildFaceBakeSignature(right, updatedFront),
     );
+  });
+
+  it('bakes vector ShapeElement rects and circles onto 3D face textures in zIndex order', () => {
+    const dieline = generateTuckEndBox({
+      length: 80,
+      width: 80,
+      height: 80,
+      thickness: 0.5,
+      bleedSize: 3,
+    });
+    const front = dieline.faces.find((f) => f.id === 'front')!;
+    const bounds = computeSvgPathBoundsMm(front.path);
+
+    const beginPath = vi.fn();
+    const rect = vi.fn();
+    const ellipse = vi.fn();
+    const fill = vi.fn();
+    const stroke = vi.fn();
+    const mockCtx = {
+      fillStyle: '',
+      strokeStyle: '',
+      lineWidth: 1,
+      globalAlpha: 1,
+      beginPath,
+      rect,
+      ellipse,
+      fill,
+      stroke,
+      fillRect: vi.fn(),
+      fillText: vi.fn(),
+      drawImage: vi.fn(),
+      save: vi.fn(),
+      restore: vi.fn(),
+      translate: vi.fn(),
+      rotate: vi.fn(),
+    } as unknown as CanvasRenderingContext2D;
+
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(mockCtx);
+
+    const bgRect: ShapeElement = {
+      id: 'shape-bg',
+      type: 'shape',
+      faceId: 'front',
+      side: 'outside',
+      shape: 'rect',
+      fill: '#2e6b3e',
+      stroke: 'none',
+      strokeWidth: 0,
+      transform: {
+        x: bounds.minX,
+        y: bounds.minY,
+        width: bounds.width,
+        height: bounds.height,
+        rotation: 0,
+      },
+      opacity: 1,
+      zIndex: 1,
+    };
+    const crestCircle: ShapeElement = {
+      id: 'shape-crest',
+      type: 'shape',
+      faceId: 'front',
+      side: 'outside',
+      shape: 'circle',
+      fill: '#6d4c41',
+      stroke: '#3e2723',
+      strokeWidth: 0.8,
+      transform: { x: bounds.minX + 20, y: bounds.minY + 20, width: 30, height: 30, rotation: 0 },
+      opacity: 1,
+      zIndex: 2,
+    };
+
+    const texture = bakeFaceTexture(front, [crestCircle, bgRect], 2);
+    expect(beginPath).toHaveBeenCalledTimes(2);
+    expect(rect).toHaveBeenCalledTimes(1);
+    expect(ellipse).toHaveBeenCalledTimes(1);
+    expect(fill).toHaveBeenCalledTimes(2);
+    expect(stroke).toHaveBeenCalledTimes(1);
+    texture.dispose();
   });
 });

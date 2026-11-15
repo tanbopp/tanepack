@@ -102,7 +102,7 @@ export function clampElementPositionToFace(
   candidateYMm: number,
   faceBounds: SvgPathBoundsMm,
 ): Point {
-  if (element.type === 'image') {
+  if (element.type === 'image' || element.type === 'shape') {
     const maxX = Math.max(faceBounds.minX, faceBounds.maxX - element.transform.width);
     const maxY = Math.max(faceBounds.minY, faceBounds.maxY - element.transform.height);
     return {

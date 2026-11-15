@@ -1,6 +1,7 @@
 // Zustand store holding 2D design elements, selection, commits, image uploads, and reset tests
 import { beforeEach, describe, expect, it } from 'vitest';
 import { computeSvgPathBoundsMm } from '@entities/dieline';
+import { findTemplateById } from '@entities/template';
 import { DEFAULT_IMAGE_SIZE_MM, DEFAULT_TEXT_CONTENT, useEditorStore } from './store';
 
 describe('useEditorStore', () => {
@@ -141,5 +142,33 @@ describe('useEditorStore', () => {
     expect(clamped.dimensions.length).toBe(50);
     expect(clamped.dimensions.width).toBe(50);
     expect(clamped.dimensions.height).toBe(2000);
+  });
+
+  it('applies templates cleanly with new dimensions, fresh element IDs, cleared selection, and committed 3D sync', () => {
+    const matcha = findTemplateById('matcha-box')!;
+    const initial = useEditorStore.getState().addElement({ content: 'Old Label' });
+    expect(useEditorStore.getState().selectedElementId).toBe(initial.id);
+
+    useEditorStore.getState().applyTemplate(matcha);
+    const firstApply = useEditorStore.getState();
+
+    expect(firstApply.dimensions).toMatchObject({ length: 80, width: 80, height: 80 });
+    expect(firstApply.dieline.dimensions).toMatchObject({ length: 80, width: 80, height: 80 });
+    expect(firstApply.selectedElementId).toBeNull();
+    expect(firstApply.elements.length).toBe(matcha.elements.length);
+    expect(firstApply.committedElements).toEqual(firstApply.elements);
+    expect(firstApply.elements.some((el) => el.id === initial.id)).toBe(false);
+    expect(firstApply.elements.some((el) => el.type === 'text' && el.content === 'Matcha')).toBe(
+      true,
+    );
+
+    // Re-applying generates brand new element IDs without mutating preset IDs
+    const firstIds = firstApply.elements.map((el) => el.id);
+    const presetIds = matcha.elements.map((el) => el.id);
+    expect(firstIds.some((id) => presetIds.includes(id))).toBe(false);
+
+    useEditorStore.getState().applyTemplate(matcha);
+    const secondIds = useEditorStore.getState().elements.map((el) => el.id);
+    expect(secondIds.some((id) => firstIds.includes(id))).toBe(false);
   });
 });

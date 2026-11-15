@@ -11,6 +11,14 @@ export {
   type ProjectSummary,
   saveProject,
 } from '@entities/design-document/api';
+export {
+  type EllipseShapeGeometry,
+  type PolygonPointMm,
+  type PolygonShapeGeometry,
+  type RectShapeGeometry,
+  resolveShapeGeometry,
+  type ShapeGeometry,
+} from '@entities/design-document/shapeGeometry';
 export type {
   DesignElement,
   DesignElementBase,

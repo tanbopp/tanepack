@@ -1,9 +1,22 @@
-// Material Design 3 project dashboard displaying saved guest carton designs in a responsive grid
+// Material Design 3 project dashboard displaying saved guest carton designs and starter templates
 import Box from '@mui/material/Box';
+import ButtonBase from '@mui/material/ButtonBase';
+import ListItemIcon from '@mui/material/ListItemIcon';
+import ListItemText from '@mui/material/ListItemText';
+import Menu from '@mui/material/Menu';
+import MenuItem from '@mui/material/MenuItem';
+import Paper from '@mui/material/Paper';
 import Typography from '@mui/material/Typography';
 import { useQuery } from '@tanstack/react-query';
+import { type MouseEvent as ReactMouseEvent, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { fetchUserProjects, type Project, type ProjectSummary } from '@entities/design-document';
+import {
+  fetchUserProjects,
+  type Project,
+  type ProjectSummary,
+  resolveShapeGeometry,
+} from '@entities/design-document';
+import { TEMPLATES } from '@entities/template';
 import { isValidUuid } from '@shared/lib/id';
 import { createSupabaseClient } from '@shared/lib/supabase';
 import { useGuestSession } from '@shared/lib/useGuestSession';
@@ -65,55 +78,111 @@ function ProjectSvgPreview({ project }: { project: Project }) {
         ))}
       </g>
       <g>
-        {project.layers.outside.map((el) => {
-          if (el.type === 'text') {
-            const transform =
-              el.transform.rotation !== 0
-                ? `rotate(${el.transform.rotation} ${el.transform.x} ${el.transform.y})`
-                : undefined;
-            return (
-              <text
-                key={el.id}
-                x={el.transform.x}
-                y={el.transform.y}
-                fontFamily={el.style.fontFamily}
-                fontSize={el.style.fontSize}
-                fontWeight={el.style.fontWeight}
-                fill={el.style.color}
-                opacity={el.opacity}
-                textAnchor="middle"
-                dominantBaseline="central"
-                transform={transform}
-              >
-                {el.content}
-              </text>
-            );
-          }
+        {[...project.layers.outside]
+          .sort((a, b) => a.zIndex - b.zIndex)
+          .map((el) => {
+            if (el.type === 'shape') {
+              const geom = resolveShapeGeometry(el);
+              const transform =
+                el.transform.rotation !== 0
+                  ? `rotate(${el.transform.rotation} ${geom.centerX} ${geom.centerY})`
+                  : undefined;
+              const stroke = el.stroke || 'none';
+              const strokeWidth = stroke !== 'none' ? el.strokeWidth : 0;
 
-          if (el.type === 'image') {
-            const cx = el.transform.x + el.transform.width * 0.5;
-            const cy = el.transform.y + el.transform.height * 0.5;
-            const transform =
-              el.transform.rotation !== 0
-                ? `rotate(${el.transform.rotation} ${cx} ${cy})`
-                : undefined;
-            return (
-              <image
-                key={el.id}
-                href={el.src}
-                x={el.transform.x}
-                y={el.transform.y}
-                width={el.transform.width}
-                height={el.transform.height}
-                preserveAspectRatio="xMidYMid meet"
-                opacity={el.opacity}
-                transform={transform}
-              />
-            );
-          }
+              if (geom.kind === 'ellipse') {
+                return (
+                  <ellipse
+                    key={el.id}
+                    cx={geom.cx}
+                    cy={geom.cy}
+                    rx={geom.rx}
+                    ry={geom.ry}
+                    fill={el.fill}
+                    stroke={stroke}
+                    strokeWidth={strokeWidth}
+                    opacity={el.opacity}
+                    transform={transform}
+                  />
+                );
+              }
+              if (geom.kind === 'polygon') {
+                return (
+                  <polygon
+                    key={el.id}
+                    points={geom.pointsAttr}
+                    fill={el.fill}
+                    stroke={stroke}
+                    strokeWidth={strokeWidth}
+                    opacity={el.opacity}
+                    transform={transform}
+                  />
+                );
+              }
+              return (
+                <rect
+                  key={el.id}
+                  x={geom.x}
+                  y={geom.y}
+                  width={geom.width}
+                  height={geom.height}
+                  fill={el.fill}
+                  stroke={stroke}
+                  strokeWidth={strokeWidth}
+                  opacity={el.opacity}
+                  transform={transform}
+                />
+              );
+            }
 
-          return null;
-        })}
+            if (el.type === 'text') {
+              const transform =
+                el.transform.rotation !== 0
+                  ? `rotate(${el.transform.rotation} ${el.transform.x} ${el.transform.y})`
+                  : undefined;
+              return (
+                <text
+                  key={el.id}
+                  x={el.transform.x}
+                  y={el.transform.y}
+                  fontFamily={el.style.fontFamily}
+                  fontSize={el.style.fontSize}
+                  fontWeight={el.style.fontWeight}
+                  fill={el.style.color}
+                  opacity={el.opacity}
+                  textAnchor="middle"
+                  dominantBaseline="central"
+                  transform={transform}
+                >
+                  {el.content}
+                </text>
+              );
+            }
+
+            if (el.type === 'image') {
+              const cx = el.transform.x + el.transform.width * 0.5;
+              const cy = el.transform.y + el.transform.height * 0.5;
+              const transform =
+                el.transform.rotation !== 0
+                  ? `rotate(${el.transform.rotation} ${cx} ${cy})`
+                  : undefined;
+              return (
+                <image
+                  key={el.id}
+                  href={el.src}
+                  x={el.transform.x}
+                  y={el.transform.y}
+                  width={el.transform.width}
+                  height={el.transform.height}
+                  preserveAspectRatio="xMidYMid meet"
+                  opacity={el.opacity}
+                  transform={transform}
+                />
+              );
+            }
+
+            return null;
+          })}
       </g>
     </svg>
   );
@@ -153,6 +222,7 @@ export default function DashboardPage() {
   const navigate = useNavigate();
   const guestId = useGuestSession();
   const isSupabaseConfigured = createSupabaseClient() !== null;
+  const [templateMenuAnchorEl, setTemplateMenuAnchorEl] = useState<HTMLElement | null>(null);
 
   const {
     data: projects = [],
@@ -172,6 +242,19 @@ export default function DashboardPage() {
     navigate('/editor');
   };
 
+  const handleOpenTemplateMenu = (event: ReactMouseEvent<HTMLElement>) => {
+    setTemplateMenuAnchorEl(event.currentTarget);
+  };
+
+  const handleCloseTemplateMenu = () => {
+    setTemplateMenuAnchorEl(null);
+  };
+
+  const handleStartFromTemplate = (templateId: string) => {
+    setTemplateMenuAnchorEl(null);
+    navigate(`/editor?template=${encodeURIComponent(templateId)}`);
+  };
+
   return (
     <Box
       sx={{
@@ -187,7 +270,7 @@ export default function DashboardPage() {
         boxSizing: 'border-box',
       }}
     >
-      {/* Dashboard Header + Create New CTA */}
+      {/* Dashboard Header + Start from Template & Create New CTAs */}
       <Box
         sx={{
           display: 'flex',
@@ -208,13 +291,141 @@ export default function DashboardPage() {
           </Typography>
         </Box>
 
-        <M3Button
-          m3Variant="filled"
-          startIcon={<M3Icon name="add" size={20} />}
-          onClick={handleCreateNew}
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25, flexWrap: 'wrap' }}>
+          <M3Button
+            m3Variant="tonal"
+            aria-haspopup="menu"
+            aria-expanded={templateMenuAnchorEl ? 'true' : undefined}
+            aria-controls={templateMenuAnchorEl ? 'dashboard-template-menu' : undefined}
+            startIcon={<M3Icon name="grid_view" size={18} />}
+            endIcon={<M3Icon name="arrow_drop_down" size={18} />}
+            onClick={handleOpenTemplateMenu}
+          >
+            Start from Template
+          </M3Button>
+          <Menu
+            id="dashboard-template-menu"
+            anchorEl={templateMenuAnchorEl}
+            open={Boolean(templateMenuAnchorEl)}
+            onClose={handleCloseTemplateMenu}
+            anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+            transformOrigin={{ vertical: 'top', horizontal: 'right' }}
+          >
+            {TEMPLATES.map((template) => (
+              <MenuItem key={template.id} onClick={() => handleStartFromTemplate(template.id)}>
+                <ListItemIcon>
+                  <Box
+                    sx={{
+                      width: 16,
+                      height: 16,
+                      borderRadius: '4px',
+                      backgroundColor: template.thumbnailColor,
+                    }}
+                  />
+                </ListItemIcon>
+                <ListItemText
+                  primary={template.name}
+                  secondary={`${template.dimensions.length}×${template.dimensions.width}×${template.dimensions.height} mm`}
+                />
+              </MenuItem>
+            ))}
+          </Menu>
+
+          <M3Button
+            m3Variant="filled"
+            startIcon={<M3Icon name="add" size={20} />}
+            onClick={handleCreateNew}
+          >
+            Create New
+          </M3Button>
+        </Box>
+      </Box>
+
+      {/* Starter Templates Quick-Launch Strip */}
+      <Box
+        component="section"
+        aria-label="Starter templates"
+        data-testid="dashboard-templates-section"
+        sx={{ display: 'flex', flexDirection: 'column', gap: 1.25 }}
+      >
+        <Box
+          sx={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 1 }}
         >
-          Create New
-        </M3Button>
+          <Typography variant="titleMedium" component="h2" color="text.primary">
+            Starter Templates
+          </Typography>
+          <Typography variant="bodySmall" color="text.secondary">
+            Click a preset to customize its dieline and artwork immediately
+          </Typography>
+        </Box>
+
+        <Box
+          sx={{
+            display: 'grid',
+            gridTemplateColumns: {
+              xs: '1fr',
+              sm: 'repeat(3, minmax(0, 1fr))',
+            },
+            gap: '16px',
+          }}
+        >
+          {TEMPLATES.map((template) => (
+            <ButtonBase
+              key={template.id}
+              data-testid={`dashboard-template-${template.id}`}
+              onClick={() => handleStartFromTemplate(template.id)}
+              sx={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 1.75,
+                p: 1.5,
+                textAlign: 'left',
+                borderRadius: '16px',
+                backgroundColor: 'var(--md-sys-color-surface-container-low)',
+                border: '1px solid var(--md-sys-color-outline-variant)',
+                transition: 'border-color 150ms ease, box-shadow 150ms ease',
+                '&:hover': {
+                  borderColor: 'var(--md-sys-color-primary)',
+                  boxShadow: '0px 2px 8px rgba(0, 0, 0, 0.08)',
+                },
+              }}
+            >
+              <Paper
+                elevation={0}
+                sx={{
+                  width: 60,
+                  height: 60,
+                  flexShrink: 0,
+                  borderRadius: '12px',
+                  backgroundColor: template.thumbnailColor,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: '#ffffff',
+                }}
+              >
+                <M3Icon name="inventory_2" size={26} />
+              </Paper>
+              <Box
+                sx={{ minWidth: 0, flex: 1, display: 'flex', flexDirection: 'column', gap: 0.25 }}
+              >
+                <Typography variant="titleSmall" component="span" color="text.primary" noWrap>
+                  {template.name}
+                </Typography>
+                <Typography variant="bodySmall" color="text.secondary" noWrap>
+                  {template.dimensions.length}×{template.dimensions.width}×
+                  {template.dimensions.height} mm
+                </Typography>
+              </Box>
+              <Box
+                component="span"
+                sx={{ color: 'var(--md-sys-color-on-surface-variant)', display: 'inline-flex' }}
+              >
+                <M3Icon name="arrow_forward" size={18} />
+              </Box>
+            </ButtonBase>
+          ))}
+        </Box>
       </Box>
 
       {/* Content Region */}

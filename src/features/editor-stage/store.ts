@@ -1,6 +1,11 @@
 // Zustand store holding 2D design elements, selection, dieline model, and 3D fold state
 import { create } from 'zustand';
-import type { DesignElement, ImageElement, TextElement } from '@entities/design-document';
+import type {
+  DesignElement,
+  ImageElement,
+  ShapeElement,
+  TextElement,
+} from '@entities/design-document';
 import {
   computeSvgPathBoundsMm,
   type Dieline,
@@ -8,6 +13,7 @@ import {
   roundMm,
   type SvgPathBoundsMm,
 } from '@entities/dieline';
+import type { Template } from '@entities/template';
 import { createEntityId } from '@shared/lib/id';
 import { clampElementPositionToFace } from './viewport';
 
@@ -52,6 +58,8 @@ export interface AddImageElementOptions {
 
 export interface ElementPatch {
   content?: string | undefined;
+  fill?: string | undefined;
+  stroke?: string | undefined;
   opacity?: number | undefined;
   transform?: Partial<DesignElement['transform']> | undefined;
   style?: Partial<TextElement['style']> | undefined;
@@ -74,6 +82,7 @@ export interface EditorStageStoreState {
   commitElements: () => void;
   setFoldAngle: (angle: number) => void;
   setDimensions: (length: number, width: number, height: number) => void;
+  applyTemplate: (template: Template) => void;
   reset: () => void;
 }
 
@@ -98,6 +107,73 @@ function resolveFaceBounds(dieline: Dieline, targetFaceId: string) {
   return { resolvedFaceId, bounds };
 }
 
+function cloneElementWithFreshId(element: DesignElement): DesignElement {
+  const id = createEntityId(10);
+  const transform = { ...element.transform };
+
+  if (element.type === 'text') {
+    return {
+      ...element,
+      id,
+      transform,
+      style: { ...element.style },
+    };
+  }
+
+  if (element.type === 'shape') {
+    const cloned: ShapeElement = {
+      ...element,
+      id,
+      transform,
+      ...(element.points ? { points: [...element.points] } : {}),
+    };
+    return cloned;
+  }
+
+  return {
+    ...element,
+    id,
+    transform,
+  };
+}
+
+function regenerateDielineForSize(
+  current: Dieline['dimensions'],
+  length: number,
+  width: number,
+  height: number,
+): { dieline: Dieline; dimensions: Dieline['dimensions']; changed: boolean } {
+  const nextLength = clampBoxDimensionMm(length, current.length);
+  const nextWidth = clampBoxDimensionMm(width, current.width);
+  const nextHeight = clampBoxDimensionMm(height, current.height);
+
+  if (
+    nextLength === current.length &&
+    nextWidth === current.width &&
+    nextHeight === current.height
+  ) {
+    return {
+      dieline: createInitialDieline(),
+      dimensions: current,
+      changed: false,
+    };
+  }
+
+  const nextDimensions: Dieline['dimensions'] = {
+    length: nextLength,
+    width: nextWidth,
+    height: nextHeight,
+    thickness: current.thickness,
+    bleedSize: current.bleedSize,
+  };
+  const nextDieline = generateTuckEndBox(nextDimensions);
+  return {
+    dieline: nextDieline,
+    dimensions: nextDieline.dimensions,
+    changed: true,
+  };
+}
+
 function patchElement(element: DesignElement, patch: ElementPatch): DesignElement {
   const nextTransform = patch.transform
     ? { ...element.transform, ...patch.transform }
@@ -111,6 +187,16 @@ function patchElement(element: DesignElement, patch: ElementPatch): DesignElemen
       opacity: nextOpacity,
       transform: nextTransform,
       style: patch.style ? { ...element.style, ...patch.style } : element.style,
+    };
+  }
+
+  if (element.type === 'shape') {
+    return {
+      ...element,
+      ...(patch.fill !== undefined ? { fill: patch.fill } : {}),
+      ...(patch.stroke !== undefined ? { stroke: patch.stroke } : {}),
+      opacity: nextOpacity,
+      transform: nextTransform,
     };
   }
 
@@ -269,28 +355,12 @@ export const useEditorStore = create<EditorStageStoreState>((set) => ({
 
   setDimensions: (length, width, height) =>
     set((state) => {
-      const current = state.dimensions;
-      const nextLength = clampBoxDimensionMm(length, current.length);
-      const nextWidth = clampBoxDimensionMm(width, current.width);
-      const nextHeight = clampBoxDimensionMm(height, current.height);
-
-      if (
-        nextLength === current.length &&
-        nextWidth === current.width &&
-        nextHeight === current.height
-      ) {
+      const regenerated = regenerateDielineForSize(state.dimensions, length, width, height);
+      if (!regenerated.changed) {
         return state;
       }
 
-      const nextDimensions: Dieline['dimensions'] = {
-        length: nextLength,
-        width: nextWidth,
-        height: nextHeight,
-        thickness: current.thickness,
-        bleedSize: current.bleedSize,
-      };
-      const nextDieline = generateTuckEndBox(nextDimensions);
-
+      const { dieline: nextDieline } = regenerated;
       const boundsByFaceId = new Map<string, SvgPathBoundsMm>();
       for (const face of nextDieline.faces) {
         boundsByFaceId.set(face.id, computeSvgPathBoundsMm(face.path));
@@ -336,6 +406,25 @@ export const useEditorStore = create<EditorStageStoreState>((set) => ({
         dimensions: nextDieline.dimensions,
         elements: nextElements,
         committedElements: nextCommittedElements,
+      };
+    }),
+
+  applyTemplate: (template) =>
+    set((state) => {
+      const regenerated = regenerateDielineForSize(
+        state.dimensions,
+        template.dimensions.length,
+        template.dimensions.width,
+        template.dimensions.height,
+      );
+      const nextElements = template.elements.map(cloneElementWithFreshId);
+
+      return {
+        dieline: regenerated.changed ? regenerated.dieline : state.dieline,
+        dimensions: regenerated.changed ? regenerated.dimensions : state.dimensions,
+        elements: nextElements,
+        committedElements: nextElements,
+        selectedElementId: null,
       };
     }),
 

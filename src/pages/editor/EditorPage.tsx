@@ -1,7 +1,9 @@
 // Material Design 3 packaging editor combining Top App Bar, Left Rail, 2D/3D Stages, and Export
 import AppBar from '@mui/material/AppBar';
 import Box from '@mui/material/Box';
+import ButtonBase from '@mui/material/ButtonBase';
 import Divider from '@mui/material/Divider';
+import Drawer from '@mui/material/Drawer';
 import FormControl from '@mui/material/FormControl';
 import InputAdornment from '@mui/material/InputAdornment';
 import InputLabel from '@mui/material/InputLabel';
@@ -9,6 +11,7 @@ import ListItemIcon from '@mui/material/ListItemIcon';
 import ListItemText from '@mui/material/ListItemText';
 import Menu from '@mui/material/Menu';
 import MenuItem from '@mui/material/MenuItem';
+import Paper from '@mui/material/Paper';
 import Select, { type SelectChangeEvent } from '@mui/material/Select';
 import Slider from '@mui/material/Slider';
 import Toolbar from '@mui/material/Toolbar';
@@ -30,12 +33,15 @@ import {
   computeTextFontSizePatch,
   DEFAULT_TEXT_CONTENT,
   DielineStage,
+  type ElementPatch,
   MAX_BOX_DIMENSION_MM,
   MAX_TEXT_FONT_SIZE_MM,
   MIN_BOX_DIMENSION_MM,
   MIN_TEXT_FONT_SIZE_MM,
   useEditorStore,
 } from '@features/editor-stage';
+import { DEFAULT_PROJECT_NAME } from '@entities/design-document';
+import { type Template, TEMPLATES } from '@entities/template';
 import { exportDielinePdf } from '@shared/lib/exportPdf';
 import { triggerPngDataUrlDownload } from '@shared/lib/exportPng';
 import { loadUploadedImageFile } from '@shared/lib/imageUpload';
@@ -119,6 +125,7 @@ export default function EditorPage() {
     useProjectPersistence();
   const statusDisplay = SAVE_STATUS_DISPLAY[saveStatus];
   const [selectedTool, setSelectedTool] = useState<EditorRailToolId | null>(null);
+  const [isTemplatesDrawerOpen, setIsTemplatesDrawerOpen] = useState(false);
   const [viewMode, setViewMode] = useState<EditorViewMode>('2d');
   const [exportMenuAnchorEl, setExportMenuAnchorEl] = useState<HTMLElement | null>(null);
   const [isExporting, setIsExporting] = useState(false);
@@ -147,6 +154,7 @@ export default function EditorPage() {
   const commitElements = useEditorStore((state) => state.commitElements);
   const setFoldAngle = useEditorStore((state) => state.setFoldAngle);
   const setDimensions = useEditorStore((state) => state.setDimensions);
+  const applyTemplate = useEditorStore((state) => state.applyTemplate);
   const resetEditorStore = useEditorStore((state) => state.reset);
 
   const storeDimensionsKey = `${dimensions.length}|${dimensions.width}|${dimensions.height}`;
@@ -306,7 +314,37 @@ export default function EditorPage() {
     }
   }, []);
 
+  const handleCloseTemplatesDrawer = () => {
+    setIsTemplatesDrawerOpen(false);
+    setSelectedTool((prev) => (prev === 'templates' ? null : prev));
+  };
+
+  const handleSelectTemplate = (template: Template) => {
+    clearCommitTimer();
+    clearDimensionTimer();
+    pendingDimensionDraftRef.current = null;
+    setDimensionDraft(null);
+    applyTemplate(template);
+    if (
+      projectName === DEFAULT_PROJECT_NAME ||
+      TEMPLATES.some((candidate) => candidate.name === projectName)
+    ) {
+      renameProject(template.name);
+    }
+    setIsTemplatesDrawerOpen(false);
+    setSelectedTool(null);
+  };
+
   const handleRailItemClick = (toolId: EditorRailToolId) => {
+    if (toolId === 'templates') {
+      setIsTemplatesDrawerOpen((prev) => {
+        const next = !prev;
+        setSelectedTool(next ? 'templates' : null);
+        return next;
+      });
+      return;
+    }
+    setIsTemplatesDrawerOpen(false);
     if (toolId === 'text') {
       clearCommitTimer();
       setSelectedTool('text');
@@ -353,16 +391,20 @@ export default function EditorPage() {
     setViewMode(mode);
   };
 
-  const handleTextContentChange = (nextContent: string) => {
-    if (!selectedElement || selectedElement.type !== 'text') {
-      return;
-    }
-    updateElement(selectedElement.id, { content: nextContent }, false);
+  const scheduleElementPatchCommit = (id: string, patch: ElementPatch) => {
+    updateElement(id, patch, false);
     clearCommitTimer();
     commitTimerRef.current = setTimeout(() => {
       commitElements();
       commitTimerRef.current = null;
     }, TEXT_COMMIT_DEBOUNCE_MS);
+  };
+
+  const handleTextContentChange = (nextContent: string) => {
+    if (!selectedElement || selectedElement.type !== 'text') {
+      return;
+    }
+    scheduleElementPatchCommit(selectedElement.id, { content: nextContent });
   };
 
   const handleTextContentCommit = () => {
@@ -380,12 +422,14 @@ export default function EditorPage() {
     if (!selectedElement || selectedElement.type !== 'text') {
       return;
     }
-    updateElement(selectedElement.id, { style: { color: nextColor } }, false);
-    clearCommitTimer();
-    commitTimerRef.current = setTimeout(() => {
-      commitElements();
-      commitTimerRef.current = null;
-    }, TEXT_COMMIT_DEBOUNCE_MS);
+    scheduleElementPatchCommit(selectedElement.id, { style: { color: nextColor } });
+  };
+
+  const handleShapeFillChange = (nextColor: string) => {
+    if (!selectedElement || selectedElement.type !== 'shape') {
+      return;
+    }
+    scheduleElementPatchCommit(selectedElement.id, { fill: nextColor });
   };
 
   const handleTextFontSizeUpdate = (nextSizeMm: number, commit: boolean) => {
@@ -721,6 +765,123 @@ export default function EditorPage() {
         </Toolbar>
       </AppBar>
 
+      {/* Templates Library Drawer (left side overlay) */}
+      <Drawer
+        anchor="left"
+        open={isTemplatesDrawerOpen}
+        onClose={handleCloseTemplatesDrawer}
+        PaperProps={{
+          sx: {
+            width: { xs: 320, sm: 460 },
+            p: 2.5,
+            backgroundColor: 'var(--md-sys-color-surface-container-low)',
+            borderRight: '1px solid var(--md-sys-color-outline-variant)',
+          },
+        }}
+      >
+        <Box
+          data-testid="templates-drawer"
+          sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}
+        >
+          <Box
+            sx={{
+              display: 'flex',
+              alignItems: 'flex-start',
+              justifyContent: 'space-between',
+              gap: 1,
+            }}
+          >
+            <Box>
+              <Typography variant="titleMedium" component="h2" color="text.primary">
+                Packaging Templates
+              </Typography>
+              <Typography variant="bodySmall" color="text.secondary">
+                Choose a carton preset to set dimensions and artwork layout.
+              </Typography>
+            </Box>
+            <M3IconButton
+              icon="close"
+              label="Close templates drawer"
+              size="small"
+              onClick={handleCloseTemplatesDrawer}
+            />
+          </Box>
+
+          <Box
+            sx={{
+              display: 'grid',
+              gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))' },
+              gap: 1.5,
+            }}
+          >
+            {TEMPLATES.map((template) => (
+              <ButtonBase
+                key={template.id}
+                data-testid={`template-card-${template.id}`}
+                onClick={() => handleSelectTemplate(template)}
+                sx={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'stretch',
+                  justifyContent: 'flex-start',
+                  textAlign: 'left',
+                  p: 1.25,
+                  gap: 1,
+                  borderRadius: '16px',
+                  backgroundColor: 'var(--md-sys-color-surface)',
+                  border: '1px solid var(--md-sys-color-outline-variant)',
+                  transition: 'border-color 150ms ease, box-shadow 150ms ease',
+                  '&:hover': {
+                    borderColor: 'var(--md-sys-color-primary)',
+                    boxShadow: '0px 2px 8px rgba(0, 0, 0, 0.08)',
+                  },
+                }}
+              >
+                <Paper
+                  elevation={0}
+                  sx={{
+                    height: 88,
+                    width: '100%',
+                    borderRadius: '12px',
+                    backgroundColor: template.thumbnailColor,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: 0.75,
+                    color: '#ffffff',
+                  }}
+                >
+                  <M3Icon name="inventory_2" size={26} />
+                  <Typography
+                    variant="labelSmall"
+                    component="span"
+                    sx={{
+                      px: 1,
+                      py: 0.25,
+                      borderRadius: '9999px',
+                      backgroundColor: 'rgba(0, 0, 0, 0.25)',
+                      color: '#ffffff',
+                      fontVariantNumeric: 'tabular-nums',
+                    }}
+                  >
+                    {template.dimensions.length}×{template.dimensions.width}×
+                    {template.dimensions.height} mm
+                  </Typography>
+                </Paper>
+
+                <Typography variant="titleSmall" component="div" color="text.primary">
+                  {template.name}
+                </Typography>
+                <Typography variant="bodySmall" color="text.secondary" sx={{ lineHeight: 1.35 }}>
+                  {template.description}
+                </Typography>
+              </ButtonBase>
+            ))}
+          </Box>
+        </Box>
+      </Drawer>
+
       {/* Main Editor Workspace: Left Rail | Center 2D/3D Stage | Right Properties Panel */}
       <Box sx={{ flex: 1, minHeight: 0, display: 'flex', overflow: 'hidden' }}>
         {/* Left Navigation Rail */}
@@ -742,11 +903,13 @@ export default function EditorPage() {
           {LEFT_RAIL_ITEMS.map((item) => {
             const isActive = selectedTool === item.id;
             const tooltip =
-              item.id === 'text'
-                ? 'Add text onto Front face'
-                : item.id === 'upload'
-                  ? 'Upload PNG or JPEG image'
-                  : `${item.label} (coming soon)`;
+              item.id === 'templates'
+                ? 'Browse packaging templates'
+                : item.id === 'text'
+                  ? 'Add text onto Front face'
+                  : item.id === 'upload'
+                    ? 'Upload PNG or JPEG image'
+                    : `${item.label} (coming soon)`;
             return (
               <Box
                 key={item.id}
@@ -1183,6 +1346,113 @@ export default function EditorPage() {
               <Typography variant="bodySmall" color="text.secondary">
                 Drag on the 2D sheet to position within the {selectedFaceName} face; committed edits
                 bake directly onto the 3D carton.
+              </Typography>
+            </Box>
+          ) : selectedElement && selectedElement.type === 'shape' ? (
+            <Box
+              data-testid="shape-properties-panel"
+              sx={{
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 2,
+              }}
+            >
+              <Box
+                sx={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 1,
+                }}
+              >
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}>
+                  <Typography variant="titleSmall" component="h2" color="text.primary">
+                    Shape Properties
+                  </Typography>
+                  {selectedFaceName && (
+                    <Typography
+                      variant="labelSmall"
+                      component="span"
+                      sx={{
+                        px: 1,
+                        py: 0.25,
+                        borderRadius: '9999px',
+                        backgroundColor: 'var(--md-sys-color-surface-container-high)',
+                        color: 'var(--md-sys-color-on-surface-variant)',
+                      }}
+                    >
+                      {selectedFaceName}
+                    </Typography>
+                  )}
+                </Box>
+                <M3IconButton
+                  icon="delete"
+                  label="Delete selected element"
+                  tooltip="Remove element"
+                  size="small"
+                  onClick={handleDeleteSelected}
+                  sx={{ color: 'var(--md-sys-color-error)' }}
+                />
+              </Box>
+
+              {selectedElement.fill !== 'none' && (
+                <Box
+                  sx={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: 1.5,
+                    px: 1.5,
+                    py: 1,
+                    borderRadius: '12px',
+                    backgroundColor: 'var(--md-sys-color-surface-container-highest)',
+                    border: '1px solid var(--md-sys-color-outline-variant)',
+                  }}
+                >
+                  <Typography
+                    variant="bodySmall"
+                    component="label"
+                    htmlFor="shape-fill-picker"
+                    color="text.primary"
+                    sx={{ fontWeight: 500 }}
+                  >
+                    Fill Color
+                  </Typography>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    <Typography
+                      variant="labelSmall"
+                      color="text.secondary"
+                      sx={{ fontFamily: 'monospace' }}
+                    >
+                      {selectedElement.fill.toUpperCase()}
+                    </Typography>
+                    <Box
+                      component="input"
+                      id="shape-fill-picker"
+                      type="color"
+                      aria-label="Fill Color"
+                      value={selectedElement.fill}
+                      onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                        handleShapeFillChange(event.target.value)
+                      }
+                      onBlur={handleTextContentCommit}
+                      sx={{
+                        width: 32,
+                        height: 32,
+                        p: 0,
+                        border: '1px solid var(--md-sys-color-outline-variant)',
+                        borderRadius: '8px',
+                        backgroundColor: 'transparent',
+                        cursor: 'pointer',
+                      }}
+                    />
+                  </Box>
+                </Box>
+              )}
+
+              <Typography variant="bodySmall" color="text.secondary">
+                {selectedElement.transform.width} × {selectedElement.transform.height} mm •{' '}
+                {selectedElement.shape === 'circle' ? 'Circle' : 'Rectangle'}
               </Typography>
             </Box>
           ) : (

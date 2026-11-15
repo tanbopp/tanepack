@@ -11,6 +11,7 @@ import {
   saveProject,
 } from '@entities/design-document';
 import type { Dieline } from '@entities/dieline';
+import { findTemplateById } from '@entities/template';
 import { env } from '@shared/config/env';
 import { createUuid, isValidUuid } from '@shared/lib/id';
 import { createSupabaseClient } from '@shared/lib/supabase';
@@ -55,6 +56,7 @@ export function useProjectPersistence(): ProjectPersistenceState {
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
   const urlProjectId = searchParams.get('id');
+  const urlTemplateId = searchParams.get('template');
   const [fallbackProjectId] = useState<string>(() => createUuid());
   const projectId = isValidUuid(urlProjectId) ? urlProjectId : fallbackProjectId;
 
@@ -71,6 +73,7 @@ export function useProjectPersistence(): ProjectPersistenceState {
   const projectCreatedAtRef = useRef(new Date().toISOString());
   const insideElementsRef = useRef<DesignElement[]>([]);
   const hydratedProjectIdRef = useRef<string | null>(null);
+  const appliedTemplateKeyRef = useRef<string | null>(null);
   const syncedSnapshotRef = useRef<EditorSnapshot>({
     dieline,
     committedElements,
@@ -84,23 +87,7 @@ export function useProjectPersistence(): ProjectPersistenceState {
     committedElements,
   });
 
-  // Sync valid project UUID into ?id= so browser refreshes reload the same database row
-  useEffect(() => {
-    if (urlProjectId === projectId) {
-      return;
-    }
-
-    setSearchParams(
-      (prev) => {
-        const next = new URLSearchParams(prev);
-        next.set('id', projectId);
-        return next;
-      },
-      { replace: true },
-    );
-  }, [projectId, setSearchParams, urlProjectId]);
-
-  // Reset store only when switching between different project IDs in the same SPA session
+  // Reset store on project switch, apply ?template= for new projects, and sync valid UUID into ?id=
   useEffect(() => {
     if (lastEditorProjectId !== null && lastEditorProjectId !== projectId) {
       useEditorStore.getState().reset();
@@ -119,7 +106,31 @@ export function useProjectPersistence(): ProjectPersistenceState {
       insideElementsRef.current = [];
     }
     lastEditorProjectId = projectId;
-  }, [projectId]);
+
+    const matchedTemplate = !isValidUuid(urlProjectId)
+      ? findTemplateById(urlTemplateId)
+      : undefined;
+    if (matchedTemplate) {
+      const applyKey = `${projectId}:${matchedTemplate.id}`;
+      if (appliedTemplateKeyRef.current !== applyKey) {
+        appliedTemplateKeyRef.current = applyKey;
+        useEditorStore.getState().applyTemplate(matchedTemplate);
+        setNameOverride({ projectId, name: matchedTemplate.name });
+      }
+    }
+
+    if (urlProjectId !== projectId || (matchedTemplate && urlTemplateId !== null)) {
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          next.set('id', projectId);
+          next.delete('template');
+          return next;
+        },
+        { replace: true },
+      );
+    }
+  }, [projectId, setSearchParams, urlProjectId, urlTemplateId]);
 
   const projectQuery = useQuery({
     queryKey: ['project', projectId],

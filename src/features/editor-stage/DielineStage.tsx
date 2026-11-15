@@ -11,7 +11,11 @@ import {
   useRef,
   useState,
 } from 'react';
-import type { DesignElement, ImageElement, TextElement } from '@entities/design-document';
+import {
+  type DesignElement,
+  resolveShapeGeometry,
+  type ShapeElement,
+} from '@entities/design-document';
 import {
   computeSvgPathBoundsMm,
   generateTuckEndBox,
@@ -83,13 +87,62 @@ type ActiveTransformInteraction =
     }
   | {
       kind: 'resize';
-      element: TextElement | ImageElement;
+      element: DesignElement;
       corner: ResizeCorner;
       pointerId: number | undefined;
       snapshot: ResizeStartSnapshot;
       faceBounds: SvgPathBoundsMm;
       hasMoved: boolean;
     };
+
+function renderShapeSvgElement(element: ShapeElement) {
+  const geom = resolveShapeGeometry(element);
+  const stroke = element.stroke || 'none';
+  const strokeWidth = stroke !== 'none' ? element.strokeWidth : 0;
+
+  if (geom.kind === 'ellipse') {
+    return (
+      <ellipse
+        cx={geom.cx}
+        cy={geom.cy}
+        rx={geom.rx}
+        ry={geom.ry}
+        fill={element.fill}
+        stroke={stroke}
+        strokeWidth={strokeWidth}
+        opacity={element.opacity}
+        style={{ pointerEvents: 'all' }}
+      />
+    );
+  }
+
+  if (geom.kind === 'polygon') {
+    return (
+      <polygon
+        points={geom.pointsAttr}
+        fill={element.fill}
+        stroke={stroke}
+        strokeWidth={strokeWidth}
+        opacity={element.opacity}
+        style={{ pointerEvents: 'all' }}
+      />
+    );
+  }
+
+  return (
+    <rect
+      x={geom.x}
+      y={geom.y}
+      width={geom.width}
+      height={geom.height}
+      fill={element.fill}
+      stroke={stroke}
+      strokeWidth={strokeWidth}
+      opacity={element.opacity}
+      style={{ pointerEvents: 'all' }}
+    />
+  );
+}
 
 function isEditableTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) {
@@ -230,7 +283,11 @@ export function DielineStage({ dimensions, isActive = true }: DielineStageProps)
   const visibleArtworkElements = useMemo(
     () =>
       elements
-        .filter((el) => (el.type === 'text' || el.type === 'image') && el.side === 'outside')
+        .filter(
+          (el) =>
+            (el.type === 'text' || el.type === 'image' || el.type === 'shape') &&
+            el.side === 'outside',
+        )
         .sort((a, b) => a.zIndex - b.zIndex),
     [elements],
   );
@@ -674,11 +731,7 @@ export function DielineStage({ dimensions, isActive = true }: DielineStageProps)
     element: DesignElement,
     corner: ResizeCorner,
   ) => {
-    if (
-      isSpacePressed ||
-      (event.pointerType === 'mouse' && event.button !== 0) ||
-      (element.type !== 'text' && element.type !== 'image')
-    ) {
+    if (isSpacePressed || (event.pointerType === 'mouse' && event.button !== 0)) {
       return;
     }
 
@@ -886,6 +939,34 @@ export function DielineStage({ dimensions, isActive = true }: DielineStageProps)
                     >
                       {el.content}
                     </text>
+                    {isSelected && (
+                      <SelectionTransformOverlay
+                        frame={frame}
+                        element={el}
+                        onRotatePointerDown={handleRotatePointerDown}
+                        onResizePointerDown={handleResizePointerDown}
+                      />
+                    )}
+                  </g>
+                );
+              }
+
+              if (el.type === 'shape') {
+                return (
+                  <g
+                    key={el.id}
+                    data-testid={`stage-shape-${el.id}`}
+                    data-element-id={el.id}
+                    transform={rotationTransform}
+                    onPointerDown={(event) => handleElementPointerDown(event, el)}
+                    onMouseDown={(event) => {
+                      if (event.button === 0 && !isSpacePressed) {
+                        event.stopPropagation();
+                      }
+                    }}
+                    style={{ cursor: elementCursor }}
+                  >
+                    {renderShapeSvgElement(el)}
                     {isSelected && (
                       <SelectionTransformOverlay
                         frame={frame}

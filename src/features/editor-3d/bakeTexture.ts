@@ -1,6 +1,12 @@
 // Offscreen 2D canvas texture baker for individual folded carton faces (text & raster images)
 import * as THREE from 'three';
-import type { DesignElement, ImageElement, TextElement } from '@entities/design-document';
+import {
+  type DesignElement,
+  type ImageElement,
+  resolveShapeGeometry,
+  type ShapeElement,
+  type TextElement,
+} from '@entities/design-document';
 import { computeSvgPathBoundsMm, type SvgPathBoundsMm } from '@entities/dieline';
 import type { Face } from '@entities/dieline/types';
 import { getCachedDecodedImage, setCachedDecodedImage } from '@shared/lib/imageUpload';
@@ -9,7 +15,7 @@ import { PX_PER_MM } from '@shared/lib/units';
 export const MAX_TEXTURE_SIZE = 1024;
 export const DEFAULT_BAKE_SCALE = 2;
 
-export type BakeableArtworkElement = TextElement | ImageElement;
+export type BakeableArtworkElement = DesignElement;
 
 export interface TexturePixelDimensions {
   width: number;
@@ -52,15 +58,15 @@ export function computeBakedTextureSize(
   };
 }
 
-/** Filters and z-orders outside-surface text and image elements belonging to a single face. */
+/** Filters and z-orders outside-surface text, image, and shape elements belonging to a single face. */
 export function getFaceElementsForFace(
   faceId: string,
   elements: readonly DesignElement[],
 ): BakeableArtworkElement[] {
   return elements
     .filter(
-      (element): element is BakeableArtworkElement =>
-        (element.type === 'text' || element.type === 'image') &&
+      (element) =>
+        (element.type === 'text' || element.type === 'image' || element.type === 'shape') &&
         element.faceId === faceId &&
         element.side === 'outside',
     )
@@ -184,6 +190,66 @@ function drawImageElementOnFaceCanvas(
   ctx.restore();
 }
 
+function drawShapeElementOnFaceCanvas(
+  ctx: CanvasRenderingContext2D,
+  element: ShapeElement,
+  originXMm: number,
+  originYMm: number,
+  pxPerMmX: number,
+  pxPerMmY: number,
+): void {
+  const geom = resolveShapeGeometry(element);
+  const centerX = (geom.centerX - originXMm) * pxPerMmX;
+  const centerY = (geom.centerY - originYMm) * pxPerMmY;
+  const avgPxPerMm = (pxPerMmX + pxPerMmY) * 0.5;
+
+  ctx.save();
+  ctx.globalAlpha = element.opacity;
+
+  if (element.transform.rotation !== 0) {
+    ctx.translate(centerX, centerY);
+    ctx.rotate((element.transform.rotation * Math.PI) / 180);
+    ctx.translate(-centerX, -centerY);
+  }
+
+  ctx.beginPath();
+  if (geom.kind === 'ellipse') {
+    const rx = Math.max(0.5, geom.rx * pxPerMmX);
+    const ry = Math.max(0.5, geom.ry * pxPerMmY);
+    ctx.ellipse(centerX, centerY, rx, ry, 0, 0, Math.PI * 2);
+  } else if (geom.kind === 'polygon') {
+    geom.points.forEach((pt, index) => {
+      const px = (pt.x - originXMm) * pxPerMmX;
+      const py = (pt.y - originYMm) * pxPerMmY;
+      if (index === 0) {
+        ctx.moveTo(px, py);
+      } else {
+        ctx.lineTo(px, py);
+      }
+    });
+    ctx.closePath();
+  } else {
+    const rectX = (geom.x - originXMm) * pxPerMmX;
+    const rectY = (geom.y - originYMm) * pxPerMmY;
+    const rectW = Math.max(0.5, geom.width * pxPerMmX);
+    const rectH = Math.max(0.5, geom.height * pxPerMmY);
+    ctx.rect(rectX, rectY, rectW, rectH);
+  }
+
+  if (element.fill && element.fill !== 'none') {
+    ctx.fillStyle = element.fill;
+    ctx.fill();
+  }
+
+  if (element.stroke && element.stroke !== 'none' && element.strokeWidth > 0) {
+    ctx.strokeStyle = element.stroke;
+    ctx.lineWidth = Math.max(0.5, element.strokeWidth * avgPxPerMm);
+    ctx.stroke();
+  }
+
+  ctx.restore();
+}
+
 function paintFaceArtwork(
   ctx: CanvasRenderingContext2D,
   width: number,
@@ -198,7 +264,9 @@ function paintFaceArtwork(
   ctx.fillRect(0, 0, width, height);
 
   for (const element of matchingElements) {
-    if (element.type === 'text') {
+    if (element.type === 'shape') {
+      drawShapeElementOnFaceCanvas(ctx, element, bounds.minX, bounds.minY, pxPerMmX, pxPerMmY);
+    } else if (element.type === 'text') {
       drawTextElementOnFaceCanvas(ctx, element, bounds.minX, bounds.minY, pxPerMmX, pxPerMmY);
     } else if (element.type === 'image') {
       drawImageElementOnFaceCanvas(
