@@ -307,7 +307,7 @@ export const FEFCO_CATALOG_ENTRIES: readonly FefcoCatalogEntry[] = [
     group: 'FEFCO 0200 (Tuck Top)',
     description:
       'Bottle/gift carrier carton with W-L-W-L panel order, locking side straps, and oval handles.',
-    defaultDimensions: { length: 120, width: 200, height: 170 },
+    defaultDimensions: { length: 180, width: 90, height: 150 },
   },
   {
     config: {
@@ -395,7 +395,7 @@ export const FEFCO_CATALOG_ENTRIES: readonly FefcoCatalogEntry[] = [
     },
     group: 'FEFCO 0200 (Slotted)',
     description: 'Wide-blank RSC shifting the manufacturer joint seam partway across the L wall.',
-    defaultDimensions: { length: 160, width: 200, height: 120 },
+    defaultDimensions: { length: 200, width: 150, height: 120 },
   },
   {
     config: {

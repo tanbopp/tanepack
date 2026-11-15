@@ -4,6 +4,7 @@ import {
   buildColumnFlapGeometry,
   buildOpenSvgPolyline,
   mapFlapPointsToMm,
+  reverseMappedFlapContour,
   type ColumnFlapGeometry,
 } from './fefcoFlaps';
 import { computeSvgPathBoundsMm, pt, roundMm, validateDimensions } from './geometry';
@@ -323,7 +324,9 @@ export function generateFefcoBox(config: FefcoConfig, dimensions: Dieline['dimen
   const bodyHeightMm = roundMm(height + thickness);
 
   const isOffsetSeam = layout === 'offset-L' || layout === 'offset-W';
+  const isBellowsBlank = topPreset === 'bellows-226' && bottomPreset === 'bellows-226';
   const hasBeveledGlueTab = (config.hasGlueTab ?? true) && !isOffsetSeam;
+  const hasBevelOnGlueCut = hasBeveledGlueTab && !isBellowsBlank;
   const minFootprint = Math.min(lenMm, widMm);
   const glueWidth = !hasBeveledGlueTab
     ? 0
@@ -422,7 +425,7 @@ export function generateFefcoBox(config: FefcoConfig, dimensions: Dieline['dimen
   }
   const hasBottomAnchor = anchorColIdx >= 0;
 
-  // Compute maximum upward projection across all top flaps so minY === 0
+  // Compute maximum upward and downward flap projections so minY === 0
   let maxTopH = 0;
   for (const geom of topGeoms) {
     for (const p of geom.cutContour) {
@@ -431,9 +434,19 @@ export function generateFefcoBox(config: FefcoConfig, dimensions: Dieline['dimen
       }
     }
   }
+  let maxBotH = 0;
+  for (const geom of botGeoms) {
+    for (const p of geom.cutContour) {
+      if (p.h > maxBotH) {
+        maxBotH = p.h;
+      }
+    }
+  }
 
   const bodyTopY = roundMm(maxTopH);
   const bodyBottomY = roundMm(bodyTopY + bodyHeightMm);
+  const bellowsTopY = roundMm(bodyTopY - maxTopH);
+  const bellowsBotY = roundMm(bodyBottomY + maxBotH);
   const firstCol = columns[0];
   const lastCol = columns[columns.length - 1];
   if (!firstCol || !lastCol) {
@@ -441,7 +454,14 @@ export function generateFefcoBox(config: FefcoConfig, dimensions: Dieline['dimen
   }
 
   // Build main continuous clockwise outer cut contour
-  const contourCmds: string[] = [`M ${pt(firstCol.x0, bodyTopY)}`];
+  const contourCmds: string[] = isBellowsBlank
+    ? [
+        `M ${pt(0, bellowsTopY)}`,
+        `L ${pt(lastCol.x1, bellowsTopY)}`,
+        `L ${pt(lastCol.x1, bellowsBotY)}`,
+        `L ${pt(0, bellowsBotY)}`,
+      ]
+    : [`M ${pt(firstCol.x0, bodyTopY)}`];
   const holeSubpaths: string[] = [];
   const cuts: Cut[] = [];
 
@@ -450,16 +470,18 @@ export function generateFefcoBox(config: FefcoConfig, dimensions: Dieline['dimen
     const geom = topGeoms[i];
     if (!col || !geom) continue;
 
-    if (geom.hasFlap && geom.cutContour.length > 0) {
-      const mmPts = mapFlapPointsToMm(geom.cutContour, col.x0, col.width, bodyTopY, -1);
-      const startsAtCursor =
-        i === 0 &&
-        mmPts[0] !== undefined &&
-        Math.abs(mmPts[0].x - firstCol.x0) < 0.01 &&
-        Math.abs(mmPts[0].y - bodyTopY) < 0.01;
-      appendContourCommands(contourCmds, mmPts, startsAtCursor);
-    } else {
-      contourCmds.push(`L ${pt(col.x1, bodyTopY)}`);
+    if (!isBellowsBlank) {
+      if (geom.hasFlap && geom.cutContour.length > 0) {
+        const mmPts = mapFlapPointsToMm(geom.cutContour, col.x0, col.width, bodyTopY, -1);
+        const startsAtCursor =
+          i === 0 &&
+          mmPts[0] !== undefined &&
+          Math.abs(mmPts[0].x - firstCol.x0) < 0.01 &&
+          Math.abs(mmPts[0].y - bodyTopY) < 0.01;
+        appendContourCommands(contourCmds, mmPts, startsAtCursor);
+      } else {
+        contourCmds.push(`L ${pt(col.x1, bodyTopY)}`);
+      }
     }
 
     for (const hole of geom.holes) {
@@ -475,18 +497,24 @@ export function generateFefcoBox(config: FefcoConfig, dimensions: Dieline['dimen
     });
   }
 
-  contourCmds.push(`L ${pt(lastCol.x1, bodyBottomY)}`);
+  if (!isBellowsBlank) {
+    contourCmds.push(`L ${pt(lastCol.x1, bodyBottomY)}`);
+  }
 
   for (let i = columns.length - 1; i >= 0; i -= 1) {
     const col = columns[i];
     const geom = botGeoms[i];
     if (!col || !geom) continue;
 
-    if (geom.hasFlap && geom.cutContour.length > 0) {
-      const mmPts = mapFlapPointsToMm(geom.cutContour, col.x0, col.width, bodyBottomY, 1).reverse();
-      appendContourCommands(contourCmds, mmPts, false);
-    } else {
-      contourCmds.push(`L ${pt(col.x0, bodyBottomY)}`);
+    if (!isBellowsBlank) {
+      if (geom.hasFlap && geom.cutContour.length > 0) {
+        const mmPts = reverseMappedFlapContour(
+          mapFlapPointsToMm(geom.cutContour, col.x0, col.width, bodyBottomY, 1),
+        );
+        appendContourCommands(contourCmds, mmPts, false);
+      } else {
+        contourCmds.push(`L ${pt(col.x0, bodyBottomY)}`);
+      }
     }
 
     for (const hole of geom.holes) {
@@ -502,7 +530,7 @@ export function generateFefcoBox(config: FefcoConfig, dimensions: Dieline['dimen
     });
   }
 
-  if (hasBeveledGlueTab) {
+  if (hasBevelOnGlueCut) {
     contourCmds.push(
       `L ${pt(0, roundMm(bodyBottomY - glueBevel))}`,
       `L ${pt(0, roundMm(bodyTopY + glueBevel))}`,
@@ -524,22 +552,35 @@ export function generateFefcoBox(config: FefcoConfig, dimensions: Dieline['dimen
     const foldGlueId = `fold-glue-${firstCol.id}`;
     folds.push({
       id: foldGlueId,
-      from: { x: glueWidth, y: bodyTopY },
-      to: { x: glueWidth, y: bodyBottomY },
+      from: { x: glueWidth, y: isBellowsBlank ? bellowsTopY : bodyTopY },
+      to: { x: glueWidth, y: isBellowsBlank ? bellowsBotY : bodyBottomY },
       angle: 90,
     });
-    if (topPreset === 'bellows-226') {
+    if (isBellowsBlank) {
+      const miterOffset = roundMm(Math.min(maxTopH, glueWidth));
       folds.push(
         {
-          id: 'fold-glue-bellows-top',
-          from: { x: 0, y: roundMm(bodyTopY + glueBevel) },
+          id: 'fold-glue-bellows-hinge-top',
+          from: { x: 0, y: bodyTopY },
           to: { x: glueWidth, y: bodyTopY },
           angle: 90,
         },
         {
-          id: 'fold-glue-bellows-bot',
-          from: { x: 0, y: roundMm(bodyBottomY - glueBevel) },
+          id: 'fold-glue-bellows-hinge-bot',
+          from: { x: 0, y: bodyBottomY },
           to: { x: glueWidth, y: bodyBottomY },
+          angle: 90,
+        },
+        {
+          id: 'fold-glue-bellows-top',
+          from: { x: glueWidth, y: bodyTopY },
+          to: { x: 0, y: roundMm(bodyTopY - miterOffset) },
+          angle: 90,
+        },
+        {
+          id: 'fold-glue-bellows-bot',
+          from: { x: glueWidth, y: bodyBottomY },
+          to: { x: 0, y: roundMm(bodyBottomY + miterOffset) },
           angle: 90,
         },
       );
@@ -547,7 +588,9 @@ export function generateFefcoBox(config: FefcoConfig, dimensions: Dieline['dimen
     faces.push({
       id: 'glue-tab',
       name: 'Glue Tab',
-      path: `M ${pt(0, roundMm(bodyTopY + glueBevel))} L ${pt(glueWidth, bodyTopY)} L ${pt(glueWidth, bodyBottomY)} L ${pt(0, roundMm(bodyBottomY - glueBevel))} Z`,
+      path: isBellowsBlank
+        ? buildWallPanelPath(0, bodyTopY, glueWidth, bodyBottomY)
+        : `M ${pt(0, roundMm(bodyTopY + glueBevel))} L ${pt(glueWidth, bodyTopY)} L ${pt(glueWidth, bodyBottomY)} L ${pt(0, roundMm(bodyBottomY - glueBevel))} Z`,
       folds: [foldGlueId],
       adjacentFaces: [firstCol.id],
     });
@@ -560,8 +603,8 @@ export function generateFefcoBox(config: FefcoConfig, dimensions: Dieline['dimen
     if (!leftCol || !rightCol) continue;
     folds.push({
       id: `fold-${leftCol.id}-${rightCol.id}`,
-      from: { x: leftCol.x1, y: bodyTopY },
-      to: { x: leftCol.x1, y: bodyBottomY },
+      from: { x: leftCol.x1, y: isBellowsBlank ? bellowsTopY : bodyTopY },
+      to: { x: leftCol.x1, y: isBellowsBlank ? bellowsBotY : bodyBottomY },
       angle: 90,
     });
   }
@@ -581,15 +624,24 @@ export function generateFefcoBox(config: FefcoConfig, dimensions: Dieline['dimen
     }
     const hingeY = side === 'top' ? bodyTopY : bodyBottomY;
     const dir: -1 | 1 = side === 'top' ? -1 : 1;
-    const hingeFoldId =
-      side === 'bottom' && col.id === 'front' ? 'fold-front-bottom-flap' : `fold-${side}-${col.id}`;
-    folds.push({
-      id: hingeFoldId,
-      from: { x: col.x0, y: hingeY },
-      to: { x: col.x1, y: hingeY },
-      angle: 90,
-    });
-    wallFolds.push(hingeFoldId);
+    const wrapPivotFoldId = geom.wrapPivotFoldIdSuffix
+      ? `fold-${side}-${col.id}-${geom.wrapPivotFoldIdSuffix}`
+      : null;
+    const hingeFoldId = wrapPivotFoldId
+      ? wrapPivotFoldId
+      : side === 'bottom' && col.id === 'front'
+        ? 'fold-front-bottom-flap'
+        : `fold-${side}-${col.id}`;
+
+    if (!wrapPivotFoldId) {
+      folds.push({
+        id: hingeFoldId,
+        from: { x: col.x0, y: hingeY },
+        to: { x: col.x1, y: hingeY },
+        angle: 90,
+      });
+      wallFolds.push(hingeFoldId);
+    }
 
     const articulatedFolds: string[] = [];
     for (const extra of geom.extraFolds) {
@@ -624,17 +676,23 @@ export function generateFefcoBox(config: FefcoConfig, dimensions: Dieline['dimen
       name: `${side === 'top' ? 'Top' : 'Bottom'} ${col.name} Flap`,
       path: buildClosedSvgPolygon(facePtsMm),
       folds: [hingeFoldId, ...articulatedFolds],
-      adjacentFaces: [col.id],
+      adjacentFaces: wrapPivotFoldId ? [] : [col.id],
     });
-    wallAdjacent.push(faceId);
+    if (!wrapPivotFoldId) {
+      wallAdjacent.push(faceId);
+    }
 
     const isUpright = geom.animatedAngleRange?.[0] === 0 && geom.animatedAngleRange?.[1] === 0;
     let resolvedLayerOrder: number;
     let resolvedTier: number | undefined;
     let foldStage: [number, number];
 
-    if (side === 'bottom') {
-      foldStage = [0, 30];
+    if (geom.foldStage) {
+      foldStage = geom.foldStage;
+      resolvedLayerOrder = geom.layerOrder ?? 1;
+      resolvedTier = geom.layerOffsetTier;
+    } else if (side === 'bottom') {
+      foldStage = wrapPivotFoldId ? [60, 75] : [0, 30];
       if (PLANAR_SLOTTED_PRESETS.has(bottomPreset)) {
         if (col.basis === 'L') {
           resolvedLayerOrder = 1;
@@ -675,7 +733,7 @@ export function generateFefcoBox(config: FefcoConfig, dimensions: Dieline['dimen
       resolvedLayerOrder = 0;
       resolvedTier =
         geom.layerOffsetTier ?? (topOverlap.innerOverlaps && col.id === 'right' ? 0.4 : 0);
-      foldStage = hasBottomAnchor ? [60, 75] : [45, 68];
+      foldStage = hasBottomAnchor ? [60, 72] : [45, 68];
     } else if (topOverlap.outerOverlaps) {
       if (col.id === 'front') {
         resolvedLayerOrder = Math.max(2, geom.layerOrder ?? 2);
@@ -689,7 +747,7 @@ export function generateFefcoBox(config: FefcoConfig, dimensions: Dieline['dimen
     } else {
       resolvedLayerOrder = geom.layerOrder ?? 1;
       resolvedTier = geom.layerOffsetTier;
-      foldStage = hasBottomAnchor ? [75, 90] : [68, 90];
+      foldStage = hasBottomAnchor ? [72, 84] : [68, 90];
     }
 
     flapGroupEntries.push({
@@ -706,9 +764,13 @@ export function generateFefcoBox(config: FefcoConfig, dimensions: Dieline['dimen
       ...(geom.tongueLayerOffsetMm !== undefined
         ? { tongueLayerOffsetMm: geom.tongueLayerOffsetMm }
         : {}),
+      ...(geom.tongueFoldStage ? { tongueFoldStage: geom.tongueFoldStage } : {}),
+      ...(geom.tongueAnimatedAngleRange
+        ? { tongueAnimatedAngleRange: geom.tongueAnimatedAngleRange }
+        : {}),
     });
 
-    return [faceId];
+    return wrapPivotFoldId ? [] : [faceId];
   };
 
   const colFlapIds = new Map<string, string[]>();

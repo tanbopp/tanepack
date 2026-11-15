@@ -180,6 +180,10 @@ export interface FoldGroup {
   tongueLayerOrder?: number | undefined;
   /** Optional local-Y thickness offset (in mm) for articulated tuck tongues inside opposite walls. */
   tongueLayerOffsetMm?: number | undefined;
+  /** Optional slider [startDeg, endDeg] window for the articulated tuck tongue or secondary wing fold. */
+  tongueFoldStage?: [number, number] | undefined;
+  /** Optional angle range override [startDeg, endDeg] (e.g. [0, -90] for upward Euroslot wings) on secondary crease. */
+  tongueAnimatedAngleRange?: [number, number] | undefined;
 }
 
 export interface Dieline {

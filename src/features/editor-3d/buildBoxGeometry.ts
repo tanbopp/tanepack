@@ -72,7 +72,7 @@ export interface KinematicBoxModel {
 
 type SvgToken = { type: 'cmd'; value: string } | { type: 'num'; value: number };
 
-const TOKEN_REGEX = /([MLQZmlqz])|([+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)/gi;
+const TOKEN_REGEX = /([MLCQZmlcqz])|([+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)/gi;
 
 function tokenizeSvgPath(path: string): SvgToken[] {
   const tokens: SvgToken[] = [];
@@ -89,7 +89,7 @@ function tokenizeSvgPath(path: string): SvgToken[] {
 }
 
 /**
- * Parses an SVG path string containing M, L, Q, Z commands in millimeters into
+ * Parses an SVG path string containing M, L, Q, C, Z commands in millimeters into
  * a THREE.Shape whose coordinates live relative to `pivotMm` and scaled by 0.01.
  */
 export function parseSvgPathToShape(
@@ -187,6 +187,33 @@ export function parseSvgPathToShape(
         trackPoint(cx, cy);
         trackPoint(curX, curY);
         shape.quadraticCurveTo(toShapeU(cx), toShapeV(cy), toShapeU(curX), toShapeV(curY));
+        break;
+      }
+      case 'C':
+      case 'c': {
+        const rawC1x = nextNum();
+        const rawC1y = nextNum();
+        const rawC2x = nextNum();
+        const rawC2y = nextNum();
+        const rawX = nextNum();
+        const rawY = nextNum();
+        const c1x = cmd === 'c' ? curX + rawC1x : rawC1x;
+        const c1y = cmd === 'c' ? curY + rawC1y : rawC1y;
+        const c2x = cmd === 'c' ? curX + rawC2x : rawC2x;
+        const c2y = cmd === 'c' ? curY + rawC2y : rawC2y;
+        curX = cmd === 'c' ? curX + rawX : rawX;
+        curY = cmd === 'c' ? curY + rawY : rawY;
+        trackPoint(c1x, c1y);
+        trackPoint(c2x, c2y);
+        trackPoint(curX, curY);
+        shape.bezierCurveTo(
+          toShapeU(c1x),
+          toShapeV(c1y),
+          toShapeU(c2x),
+          toShapeV(c2y),
+          toShapeU(curX),
+          toShapeV(curY),
+        );
         break;
       }
       default: {
@@ -548,6 +575,13 @@ export function buildBoxGeometry(dieline: Dieline): KinematicBoxModel {
   const createdParts: KinematicFacePart[] = [];
   const thicknessStepWorld = Math.max(0.5, dieline.dimensions.thickness) * DIELINE_SCALE_TO_3D;
 
+  const isArticulatedSecondaryFold = (foldId: string): boolean =>
+    foldId.endsWith('-tuck-tongue') ||
+    foldId.endsWith('-latch-tab') ||
+    foldId.endsWith('-latch-lock') ||
+    foldId.endsWith('-euroslot-wing') ||
+    foldId.endsWith('-handle-wing');
+
   const splitTuckFaceIntoParts = (
     face: Face,
     pivotMm: Point,
@@ -557,8 +591,8 @@ export function buildBoxGeometry(dieline: Dieline): KinematicBoxModel {
     lidLayerOrder: number,
     tongueLayerOrder: number,
     tongueLayerOffsetMm: number,
-    animatedAngleRange: [number, number],
-    foldStage: [number, number],
+    tongueAnimatedAngleRange: [number, number],
+    tongueFoldStage: [number, number],
   ): { lidPart: KinematicFacePart; tongueNode: KinematicBoxNode } | null => {
     const faceBounds = faceBoundsMap.get(face.id);
     if (!faceBounds) {
@@ -566,7 +600,7 @@ export function buildBoxGeometry(dieline: Dieline): KinematicBoxModel {
     }
 
     const internalHorizontalFold = face.folds
-      .filter((fId) => fId !== pivotFoldId)
+      .filter((fId) => fId !== pivotFoldId && isArticulatedSecondaryFold(fId))
       .map((fId) => foldMap.get(fId))
       .find((candidate): candidate is Fold =>
         Boolean(
@@ -634,8 +668,8 @@ export function buildBoxGeometry(dieline: Dieline): KinematicBoxModel {
         pivotMm: tonguePivotMm,
         rotationAxis: tongueRule.axis,
         rotationSign: tongueRule.sign,
-        animatedAngleRange,
-        foldStage,
+        animatedAngleRange: tongueAnimatedAngleRange,
+        foldStage: tongueFoldStage,
         layerOrder: tongueLayerOrder,
         layerOffsetWorld: tongueLayerOffsetMm * DIELINE_SCALE_TO_3D,
         faces: [tonguePart],
@@ -701,8 +735,8 @@ export function buildBoxGeometry(dieline: Dieline): KinematicBoxModel {
         layerOrder ?? 1,
         group.tongueLayerOrder ?? 0,
         group.tongueLayerOffsetMm ?? 0,
-        group.animatedAngleRange,
-        foldStage,
+        group.tongueAnimatedAngleRange ?? group.animatedAngleRange,
+        group.tongueFoldStage ?? foldStage,
       );
 
       if (splitTuck) {
@@ -754,7 +788,7 @@ export function buildBoxGeometry(dieline: Dieline): KinematicBoxModel {
       -1,
       rootTuckOffsetMm,
       [0, 90],
-      [60, 90],
+      [84, 90],
     );
     if (splitRootTuck) {
       rootDirectParts.push(splitRootTuck.lidPart);

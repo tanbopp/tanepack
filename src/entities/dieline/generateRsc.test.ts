@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { computeSvgPathBoundsMm, generateRsc } from '@entities/dieline';
 
-const VALID_SVG_PATH_REGEX = /^[MLQZ\d.,\s-]+$/;
+const VALID_SVG_PATH_REGEX = /^[MLCQZ\d.,\s-]+$/;
 const DECIMAL_OVER_TWO_REGEX = /\.\d{3,}/;
 
 const SHIPPING_SMALL = {

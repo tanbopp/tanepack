@@ -718,7 +718,7 @@ export interface SvgPathBoundsMm {
 
 const PATH_NUMBERS_REGEX = /[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?/gi;
 
-/** Computes the millimeter bounding box and center of an SVG path using absolute M/L/Q/Z coords. */
+/** Computes the millimeter bounding box and center of an SVG path using absolute M/L/Q/C/Z coords. */
 export function computeSvgPathBoundsMm(svgPath: string): SvgPathBoundsMm {
   const numbers = svgPath.match(PATH_NUMBERS_REGEX)?.map(Number) ?? [];
   let minX = Infinity;

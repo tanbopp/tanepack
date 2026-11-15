@@ -574,4 +574,110 @@ describe('buildBoxGeometry', () => {
     );
     f0205Model.dispose();
   });
+
+  it('supports cubic Bezier C paths and enforces Step 19 tuck-tongue, hang-header, 0241 Euroslot wing, 0222 handle, and 0225 wrap kinematics', () => {
+    const { shape: cubicShape, boundsMm: cubicBounds } = parseSvgPathToShape(
+      'M 0 0 L 10 0 C 14 0 14 10 10 10 L 0 10 Z',
+      { x: 0, y: 0 },
+    );
+    const cubicPts = cubicShape.getPoints(16);
+    expect(cubicBounds.maxX).toBe(14);
+    expect(cubicPts.length).toBeGreaterThan(8);
+    expect(Math.max(...cubicPts.map((p) => p.x))).toBeGreaterThan(10.5 * DIELINE_SCALE_TO_3D);
+
+    const findNode = (node: KinematicBoxNode, id: string): KinematicBoxNode | null => {
+      if (node.id === id) return node;
+      for (const child of node.children) {
+        const found = findNode(child, id);
+        if (found) return found;
+      }
+      return null;
+    };
+
+    const dims = { length: 180, width: 100, height: 140, thickness: 0.5, bleedSize: 3 };
+
+    // 0210 & 0215: lid closes [72, 84], tongues stay flat until 84 then tuck 90 deg during [84, 90]
+    const m0215 = buildBoxGeometry(generateDieline('fefco-0215', dims));
+    const tongue0215 = findNode(m0215.root, 'group-top-flap-back-tongue')!;
+    expect(computeNodeTargetAngleDeg(tongue0215, 78).targetDeg).toBe(0);
+    expect(computeNodeTargetAngleDeg(tongue0215, 84).targetDeg).toBe(0);
+    expect(computeNodeTargetAngleDeg(tongue0215, 90).targetDeg).toBe(90);
+    m0215.dispose();
+
+    const m0210 = buildBoxGeometry(generateDieline('fefco-0210', dims));
+    const topTongue0210 = findNode(m0210.root, 'group-top-flap-back-tongue')!;
+    const botTongue0210 = m0210.root.children.find((c) =>
+      c.faces.some((f) => f.faceId === 'bottom-flap-back-tongue'),
+    )!;
+    expect(computeNodeTargetAngleDeg(topTongue0210, 84).targetDeg).toBe(0);
+    expect(computeNodeTargetAngleDeg(botTongue0210, 84).targetDeg).toBe(0);
+    expect(computeNodeTargetAngleDeg(topTongue0210, 90).targetDeg).toBe(90);
+    expect(computeNodeTargetAngleDeg(botTongue0210, 90).targetDeg).toBe(90);
+    m0210.dispose();
+
+    // 0240 & 0242: hang headers stay upright [0, 0] without false splitting; 0242 front latch tucks [84, 90]
+    const m0240 = buildBoxGeometry(generateDieline('fefco-0240', dims));
+    expect(findNode(m0240.root, 'group-top-flap-back-tongue')).toBeNull();
+    m0240.dispose();
+
+    const m0242 = buildBoxGeometry(generateDieline('fefco-0242', dims));
+    expect(findNode(m0242.root, 'group-top-flap-back-tongue')).toBeNull();
+    const frontLid0242 = findNode(m0242.root, 'group-top-flap-front')!;
+    const frontLatch0242 = findNode(m0242.root, 'group-top-flap-front-tongue')!;
+    expect(computeNodeTargetAngleDeg(frontLid0242, 84).targetDeg).toBe(90);
+    expect(computeNodeTargetAngleDeg(frontLatch0242, 84).targetDeg).toBe(0);
+    expect(computeNodeTargetAngleDeg(frontLatch0242, 90).targetDeg).toBe(90);
+    const closed0242 = computeFaceWorldBounds(m0242.root, 90);
+    expect(closed0242.get('top-flap-back')!.max.y).toBeGreaterThan(
+      closed0242.get('front')!.max.y + 0.5,
+    );
+    m0242.dispose();
+
+    // 0241: c1/c3 fold inward horizontally [60, 72] and euroslot wings hinge -90 deg UPWARD [68, 78]
+    const m0241 = buildBoxGeometry(generateDieline('fefco-0241', dims));
+    const wingLeft = findNode(m0241.root, 'group-top-flap-left-tongue')!;
+    const wingRight = findNode(m0241.root, 'group-top-flap-right-tongue')!;
+    expect(computeNodeTargetAngleDeg(wingLeft, 68).targetDeg).toBe(0);
+    expect(computeNodeTargetAngleDeg(wingLeft, 78).targetDeg).toBe(-90);
+    expect(computeNodeTargetAngleDeg(wingRight, 78).targetDeg).toBe(-90);
+    const closed0241 = computeFaceWorldBounds(m0241.root, 90);
+    expect(closed0241.get('top-flap-left-tongue')!.max.y).toBeGreaterThan(
+      closed0241.get('front')!.max.y + 0.2,
+    );
+    expect(closed0241.get('top-flap-right-tongue')!.max.y).toBeGreaterThan(
+      closed0241.get('front')!.max.y + 0.2,
+    );
+    m0241.dispose();
+
+    // 0222: gable carrier handles hinge -90 deg UPWARD above closed carton [74, 84]
+    const m0222 = buildBoxGeometry(
+      generateDieline('fefco-0222', {
+        length: 180,
+        width: 90,
+        height: 150,
+        thickness: 0.5,
+        bleedSize: 3,
+      }),
+    );
+    const handleFront = findNode(m0222.root, 'group-top-flap-front-tongue')!;
+    const handleBack = findNode(m0222.root, 'group-top-flap-back-tongue')!;
+    expect(computeNodeTargetAngleDeg(handleFront, 74).targetDeg).toBe(0);
+    expect(computeNodeTargetAngleDeg(handleFront, 84).targetDeg).toBe(-90);
+    expect(computeNodeTargetAngleDeg(handleBack, 84).targetDeg).toBe(-90);
+    const closed0222 = computeFaceWorldBounds(m0222.root, 90);
+    expect(closed0222.get('top-flap-front-tongue')!.max.y).toBeGreaterThan(
+      closed0222.get('front')!.max.y + 0.2,
+    );
+    expect(closed0222.get('top-flap-back-tongue')!.max.y).toBeGreaterThan(
+      closed0222.get('front')!.max.y + 0.2,
+    );
+    m0222.dispose();
+
+    // 0225: bottom wrap seam wings swing up vertically alongside outer walls during [60, 75]
+    const m0225 = buildBoxGeometry(generateDieline('fefco-0225', dims));
+    const closed0225 = computeFaceWorldBounds(m0225.root, 90);
+    expect(closed0225.get('bottom-flap-left')!.max.y).toBeGreaterThan(0.5);
+    expect(closed0225.get('bottom-flap-right')!.max.y).toBeGreaterThan(0.5);
+    m0225.dispose();
+  });
 });

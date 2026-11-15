@@ -7,7 +7,7 @@ import {
   type FefcoConfig,
 } from '@entities/dieline';
 
-const VALID_SVG_PATH_REGEX = /^[MLQZ\d.,\s-]+$/;
+const VALID_SVG_PATH_REGEX = /^[MLCQZ\d.,\s-]+$/;
 
 const SAMPLE_DIMENSIONS = {
   length: 300,
@@ -196,7 +196,7 @@ describe('FefcoFactory (generateFefcoBox)', () => {
     // 1.0 * W_eff (200.5) + tuckDepth (20) = 220.5 mm top lid
     expect(topLid.height).toBeCloseTo(220.5, 4);
     expect(topDust.height).toBeCloseTo(74.19, 2);
-    expect(botLockFront.height).toBeCloseTo(roundTo2(0.63 * 200.5), 2);
+    expect(botLockFront.height).toBeCloseTo(roundTo2(0.633 * 200.5), 2);
 
     const tuckLidFace = dieline.faces.find((f) => f.id === 'top-flap-back')!;
     expect(tuckLidFace.folds).toContain('fold-top-tuck-tongue');
@@ -253,6 +253,81 @@ describe('FefcoFactory (generateFefcoBox)', () => {
     expect(() => generateFefcoBox(invalidConfig, SAMPLE_DIMENSIONS)).toThrow(
       /Unsupported FEFCO top flap type/,
     );
+  });
+
+  it('emits PDF-exact slits, smooth cubic curves, wrap/bellows blanks, and FEFCO 0230 offset-L proportions', () => {
+    // 0218: 2 top diagonal reinforcement slits on c0 (back) & cubic C locking ears on c2 (front)
+    const f0218 = generateDieline('fefco-0218', SAMPLE_DIMENSIONS);
+    const topSlits218 = f0218.cuts.filter((c) => c.id.startsWith('cut-slit-top-back-'));
+    expect(topSlits218).toHaveLength(2);
+    expect(f0218.faces.find((f) => f.id === 'top-flap-front')!.path).toContain(' C ');
+    expect(f0218.cuts.every((c) => VALID_SVG_PATH_REGEX.test(c.path))).toBe(true);
+
+    // 0232: 4 closed bottom diagonal V-slits on c0/c2 & cubic C concave fillets on c1/c3
+    const f0232 = generateDieline('fefco-0232', SAMPLE_DIMENSIONS);
+    const botSlits232 = f0232.cuts.filter(
+      (c) => c.id.startsWith('cut-slit-bottom-') && c.path.trim().endsWith('Z'),
+    );
+    expect(botSlits232).toHaveLength(4);
+    expect(f0232.faces.find((f) => f.id === 'bottom-flap-left')!.path).toContain(' C ');
+    expect(f0232.cuts.every((c) => VALID_SVG_PATH_REGEX.test(c.path))).toBe(true);
+
+    // Smooth cubic Bezier curves across handles, Euroslots, thumb notches, and rounded corners
+    for (const id of [
+      'fefco-0217',
+      'fefco-0219',
+      'fefco-0222',
+      'fefco-0227',
+      'fefco-0240',
+      'fefco-0241',
+      'fefco-0242',
+    ] as const) {
+      const d = generateDieline(id, {
+        length: 180,
+        width: 100,
+        height: 140,
+        thickness: 0.5,
+        bleedSize: 3,
+      });
+      const allPaths = d.cuts.map((c) => c.path).join(' ');
+      expect(allPaths).toContain(' C ');
+      expect(d.cuts.every((c) => VALID_SVG_PATH_REGEX.test(c.path))).toBe(true);
+    }
+
+    // 0225: bottom wrap slits on c1/c3 + standalone wrap-seam pivot fold groups
+    const f0225 = generateDieline('fefco-0225', SAMPLE_DIMENSIONS);
+    expect(f0225.cuts.filter((c) => c.id.startsWith('cut-slit-bottom-'))).toHaveLength(2);
+    expect(f0225.foldGroups.some((g) => g.pivotFoldId === 'fold-bottom-left-wrap-seam-l')).toBe(
+      true,
+    );
+    expect(f0225.foldGroups.some((g) => g.pivotFoldId === 'fold-bottom-right-wrap-seam-r')).toBe(
+      true,
+    );
+
+    // 0226: unslotted rectangular outer perimeter & full-height column creases
+    const f0226 = generateDieline('fefco-0226', SAMPLE_DIMENSIONS);
+    const outerBounds226 = computeSvgPathBoundsMm(f0226.cuts[0]!.path);
+    expect(outerBounds226.minX).toBe(0);
+    expect(outerBounds226.minY).toBe(0);
+    expect(outerBounds226.maxX).toBeCloseTo(f0226.totalWidth, 2);
+    expect(outerBounds226.maxY).toBeCloseTo(f0226.totalHeight, 2);
+    const vertCrease = f0226.folds.find((f) => f.id === 'fold-left-front')!;
+    expect(Math.abs(vertCrease.to.y - vertCrease.from.y)).toBeCloseTo(f0226.totalHeight, 2);
+
+    // 0230: offset-L panel proportions (glue-flange 0.25L+overlap + back 0.75L)
+    const f0230 = generateDieline('fefco-0230', {
+      length: 200,
+      width: 150,
+      height: 120,
+      thickness: 0.5,
+      bleedSize: 3,
+    });
+    const glueBounds = computeSvgPathBoundsMm(
+      f0230.faces.find((f) => f.id === 'glue-flange')!.path,
+    );
+    const backBounds = computeSvgPathBoundsMm(f0230.faces.find((f) => f.id === 'back')!.path);
+    expect(glueBounds.width + backBounds.width).toBeCloseTo(200.5 + 8, 2);
+    expect(backBounds.width).toBeGreaterThan(glueBounds.width);
   });
 });
 
