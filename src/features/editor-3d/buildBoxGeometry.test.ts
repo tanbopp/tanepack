@@ -3,7 +3,10 @@ import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
 import {
   generateFefco0200,
+  generateFefco0202,
   generateFefco0203,
+  generateFefco0204,
+  generateFefco0205,
   generateFefco0215,
   generateRsc,
   generateTuckEndBox,
@@ -473,5 +476,54 @@ describe('buildBoxGeometry', () => {
     }
 
     model.dispose();
+  });
+
+  it('folds FEFCO 0202, 0204, and 0205 flat on Y = 0 in strict wall -> inner -> outer order without Z-fighting', () => {
+    const shipping = { length: 300, width: 200, height: 150, thickness: 0.5, bleedSize: 3 };
+
+    const f0202Model = buildBoxGeometry(generateFefco0202(shipping));
+    const f0202Closed = computeFaceWorldBounds(f0202Model.root, 90);
+    // Seated flat on Y = 0 with bottom-flap-back & inner flaps stepped strictly inward (+Y)
+    expect(f0202Closed.get('bottom-flap-front')!.min.y).toBeCloseTo(0, 4);
+    expect(f0202Closed.get('bottom-flap-back')!.min.y).toBeGreaterThan(
+      f0202Closed.get('bottom-flap-front')!.min.y,
+    );
+    expect(f0202Closed.get('top-flap-front')!.min.y).toBeGreaterThan(
+      f0202Closed.get('top-flap-back')!.min.y,
+    );
+    f0202Model.dispose();
+
+    const f0204Model = buildBoxGeometry(generateFefco0204(shipping));
+    const f0204Closed = computeFaceWorldBounds(f0204Model.root, 90);
+    expect(f0204Closed.get('bottom-flap-front')!.min.y).toBeCloseTo(0, 4);
+    f0204Model.dispose();
+
+    const f0205Model = buildBoxGeometry(generateFefco0205(shipping));
+    // Verify strict stage sequence on 0205: at 60° walls upright while top flaps open; at 75° inner closed, outer open
+    const findNode = (node: KinematicBoxNode, id: string): KinematicBoxNode | null => {
+      if (node.id === id) return node;
+      for (const child of node.children) {
+        const found = findNode(child, id);
+        if (found) return found;
+      }
+      return null;
+    };
+    const leftWallNode = findNode(f0205Model.root, 'group-left-wall')!;
+    const topLeftNode = findNode(f0205Model.root, 'group-top-flap-left')!;
+    const topFrontNode = findNode(f0205Model.root, 'group-top-flap-front')!;
+    expect(computeNodeTargetAngleDeg(leftWallNode, 60).targetDeg).toBe(90);
+    expect(computeNodeTargetAngleDeg(topLeftNode, 60).targetDeg).toBe(0);
+    expect(computeNodeTargetAngleDeg(topLeftNode, 75).targetDeg).toBe(90);
+    expect(computeNodeTargetAngleDeg(topFrontNode, 75).targetDeg).toBe(0);
+
+    const f0205Closed = computeFaceWorldBounds(f0205Model.root, 90);
+    expect(f0205Closed.get('bottom-flap-front')!.min.y).toBeCloseTo(0, 4);
+    expect(f0205Closed.get('bottom-flap-back')!.min.y).toBeGreaterThan(
+      f0205Closed.get('bottom-flap-front')!.min.y,
+    );
+    expect(f0205Closed.get('top-flap-front')!.min.y).toBeGreaterThan(
+      f0205Closed.get('top-flap-back')!.min.y,
+    );
+    f0205Model.dispose();
   });
 });

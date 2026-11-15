@@ -5,7 +5,19 @@ import { generateFefcoBox } from './fefcoFactory.ts';
 export const FEFCO_0215_CONFIG: FefcoConfig = {
   id: 'fefco-0215',
   name: 'FEFCO 0215 (Overlap Top / RSC Bottom)',
-  flapConfig: { top: 'full', bottom: 'rsc' },
+  topFlapType: 'full',
+  bottomFlapType: 'rsc',
+  flapMath: {
+    topOuter: 1,
+    bottomOuter: 0.5,
+    inner: 0.5,
+    topInner: 1,
+    bottomInner: 0.5,
+    topOuterBasis: 'W',
+    bottomOuterBasis: 'W',
+    innerBasis: 'W',
+  },
+  hasGlueTab: true,
   panelStyle: 'standard',
 };
 

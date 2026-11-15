@@ -622,7 +622,7 @@ describe('EditorPage', () => {
     expect(mockSaveProject).not.toHaveBeenCalled();
   });
 
-  it('switches Box Type between Tuck-End, FEFCO 0201 (RSC), and FEFCO 0203 (Full Overlap) and applies Shipping presets', async () => {
+  it('switches Box Type across grouped Retail and FEFCO 0200 options and applies Shipping presets', async () => {
     renderEditorPage();
 
     // Select Shipping Small: 300x200x150 preset
@@ -630,11 +630,27 @@ describe('EditorPage', () => {
     fireEvent.click(screen.getByRole('option', { name: 'Shipping Small: 300x200x150' }));
     expect(screen.getByTestId('box-dimensions-summary').textContent).toBe('300 × 200 × 150 mm');
 
-    // Switch Box Type to FEFCO 0201 (RSC)
+    // Open grouped Box Type selector and check group subheaders
     fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Box Type' }));
+    expect(screen.getByText('Retail Cartons')).toBeTruthy();
+    expect(screen.getByText('FEFCO 0200 Series (Slotted)')).toBeTruthy();
+
+    // Switch Box Type to FEFCO 0201 (RSC)
     fireEvent.click(screen.getByRole('option', { name: 'FEFCO 0201 (RSC)' }));
     expect(useEditorStore.getState().archetype).toBe('fefco-0201');
     expect(screen.getByTestId('dieline-svg').getAttribute('viewBox')).toBe('0 0 1037 351');
+
+    // Switch Box Type to FEFCO 0202 (Overlap Slotted) -> ½(W + o) = 110.28 mm flaps
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Box Type' }));
+    fireEvent.click(screen.getByRole('option', { name: 'FEFCO 0202 (Overlap Slotted)' }));
+    expect(useEditorStore.getState().archetype).toBe('fefco-0202');
+    expect(screen.getByTestId('dieline-svg').getAttribute('viewBox')).toBe('0 0 1037 371.06');
+
+    // Switch Box Type to FEFCO 0205 (Center Special Overlap) -> ½ L = 150.25 mm flaps
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Box Type' }));
+    fireEvent.click(screen.getByRole('option', { name: 'FEFCO 0205 (Center Special Overlap)' }));
+    expect(useEditorStore.getState().archetype).toBe('fefco-0205');
+    expect(screen.getByTestId('dieline-svg').getAttribute('viewBox')).toBe('0 0 1037 451');
 
     // Switch Box Type to FEFCO 0203 (Full Overlap)
     fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Box Type' }));

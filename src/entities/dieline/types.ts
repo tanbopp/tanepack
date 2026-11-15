@@ -32,10 +32,34 @@ export interface Face {
 }
 
 export type DielineArchetype =
-  'tuck-end' | 'fefco-0200' | 'fefco-0201' | 'fefco-0203' | 'fefco-0215';
+  | 'tuck-end'
+  | 'fefco-0200'
+  | 'fefco-0201'
+  | 'fefco-0202'
+  | 'fefco-0203'
+  | 'fefco-0204'
+  | 'fefco-0205'
+  | 'fefco-0206'
+  | 'fefco-0209'
+  | 'fefco-0215';
 
 /** Supported top/bottom flap architectures in the parametric FEFCO engine. */
-export type FefcoFlapType = 'rsc' | 'full' | 'none' | 'tuck' | 'crash-lock';
+export type FefcoFlapType = 'none' | 'rsc' | 'full' | 'extended' | 'custom' | 'tuck' | 'crash-lock';
+
+/** Reference box dimension axis used as the multiplier basis for flap heights. */
+export type FefcoAxisBasis = 'W' | 'L';
+
+/** Parametric flap height multipliers relative to box Depth (`W`) or Length (`L`). */
+export interface FefcoFlapMath {
+  topOuter: number;
+  bottomOuter: number;
+  inner: number;
+  topOuterBasis?: FefcoAxisBasis | undefined;
+  bottomOuterBasis?: FefcoAxisBasis | undefined;
+  innerBasis?: FefcoAxisBasis | undefined;
+  topInner?: number | undefined;
+  bottomInner?: number | undefined;
+}
 
 /** Panel body perforation/slot variation style for FEFCO cartons. */
 export type FefcoPanelStyle = 'standard' | 'dz' | 'perforated';
@@ -44,11 +68,17 @@ export type FefcoPanelStyle = 'standard' | 'dz' | 'perforated';
 export interface FefcoConfig {
   id: DielineArchetype;
   name: string;
-  flapConfig: {
-    top: FefcoFlapType;
-    bottom: FefcoFlapType;
-  };
-  panelStyle: FefcoPanelStyle;
+  topFlapType?: FefcoFlapType | undefined;
+  bottomFlapType?: FefcoFlapType | undefined;
+  flapConfig?:
+    | {
+        top: FefcoFlapType;
+        bottom: FefcoFlapType;
+      }
+    | undefined;
+  flapMath?: FefcoFlapMath | undefined;
+  hasGlueTab?: boolean | undefined;
+  panelStyle?: FefcoPanelStyle | undefined;
 }
 
 export interface FoldGroup {

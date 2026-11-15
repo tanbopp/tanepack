@@ -1,10 +1,12 @@
-// Scalable parametric FEFCO slotted carton factory supporting dynamic top and bottom flap architectures
+// Scalable parametric FEFCO slotted carton factory supporting dynamic top/bottom flap architectures
 import type {
   Bleed,
   Cut,
   Dieline,
   Face,
+  FefcoAxisBasis,
   FefcoConfig,
+  FefcoFlapMath,
   FefcoFlapType,
   Fold,
   FoldGroup,
@@ -18,7 +20,11 @@ import {
   validateDimensions,
 } from './geometry.ts';
 
-type SupportedSlottedFlapType = 'none' | 'rsc' | 'full';
+export type { FefcoConfig, FefcoFlapMath };
+
+type SupportedSlottedFlapType = 'none' | 'rsc' | 'full' | 'extended' | 'custom';
+type EdgeSide = 'top' | 'bottom';
+type WallKey = 'left' | 'front' | 'right' | 'back';
 
 interface EdgeFlapMetrics {
   flapType: SupportedSlottedFlapType;
@@ -27,20 +33,71 @@ interface EdgeFlapMetrics {
   innerHeight: number;
 }
 
+interface EdgeFlapResult {
+  folds: Fold[];
+  faces: Face[];
+  wallFolds: Record<WallKey, string[]>;
+  wallAdjacent: Record<WallKey, string[]>;
+}
+
 function resolveSupportedFlapType(
-  side: 'top' | 'bottom',
-  flapType: FefcoFlapType,
+  side: EdgeSide,
+  flapType: FefcoFlapType | undefined,
 ): SupportedSlottedFlapType {
-  if (flapType === 'none' || flapType === 'rsc' || flapType === 'full') {
+  if (
+    flapType === 'none' ||
+    flapType === 'rsc' ||
+    flapType === 'full' ||
+    flapType === 'extended' ||
+    flapType === 'custom'
+  ) {
     return flapType;
   }
   throw new Error(
-    `Unsupported FEFCO ${side} flap type "${flapType}" in FefcoFactory (not implemented yet).`,
+    `Unsupported FEFCO ${side} flap type "${String(flapType)}" in FefcoFactory (not implemented yet).`,
   );
 }
 
-function computeEdgeFlapMetrics(
+function resolveBasisWidth(basis: FefcoAxisBasis, leftWidth: number, frontWidth: number): number {
+  return basis === 'L' ? frontWidth : leftWidth;
+}
+
+function resolveFlapMultipliers(
+  side: EdgeSide,
   flapType: SupportedSlottedFlapType,
+  flapMath: FefcoFlapMath | undefined,
+): { outerRatio: number; innerRatio: number } {
+  if (flapType === 'none') {
+    return { outerRatio: 0, innerRatio: 0 };
+  }
+
+  const presetRatio = flapType === 'full' ? 1 : flapType === 'rsc' ? 0.5 : null;
+  const configuredOuter = side === 'top' ? flapMath?.topOuter : flapMath?.bottomOuter;
+  const outerRatio = configuredOuter ?? presetRatio;
+
+  if (outerRatio === null || !Number.isFinite(outerRatio) || outerRatio < 0) {
+    throw new Error(
+      `Missing valid flapMath.${side === 'top' ? 'topOuter' : 'bottomOuter'} for FEFCO flapType "${flapType}".`,
+    );
+  }
+
+  const configuredInner =
+    side === 'top'
+      ? (flapMath?.topInner ?? flapMath?.inner)
+      : (flapMath?.bottomInner ?? flapMath?.inner);
+  const innerRatio = configuredInner ?? outerRatio;
+
+  if (!Number.isFinite(innerRatio) || innerRatio < 0) {
+    throw new Error(`Invalid flapMath inner ratio "${String(innerRatio)}" for FEFCO ${side}.`);
+  }
+
+  return { outerRatio, innerRatio };
+}
+
+function computeEdgeFlapMetrics(
+  side: EdgeSide,
+  flapType: SupportedSlottedFlapType,
+  flapMath: FefcoFlapMath | undefined,
   leftWidth: number,
   frontWidth: number,
   thickness: number,
@@ -49,23 +106,27 @@ function computeEdgeFlapMetrics(
     return { flapType, hasFlaps: false, outerHeight: 0, innerHeight: 0 };
   }
 
-  const outerFlapRatio = flapType === 'full' ? 1 : 0.5;
-  const outerHeight = roundMm(leftWidth * outerFlapRatio);
+  const { outerRatio, innerRatio } = resolveFlapMultipliers(side, flapType, flapMath);
+  const outerBasis: FefcoAxisBasis =
+    (side === 'top' ? flapMath?.topOuterBasis : flapMath?.bottomOuterBasis) ?? 'W';
+  const innerBasis: FefcoAxisBasis = flapMath?.innerBasis ?? 'W';
+
+  const outerHeight = roundMm(resolveBasisWidth(outerBasis, leftWidth, frontWidth) * outerRatio);
+  const rawInnerHeight = roundMm(resolveBasisWidth(innerBasis, leftWidth, frontWidth) * innerRatio);
+
   const innerCollisionMargin = Math.max(1.5, thickness * 1.5 + 1);
   const maxSafeInnerHeight = Math.max(4, frontWidth * 0.5 - innerCollisionMargin);
-  const innerHeight = roundMm(Math.min(outerHeight, maxSafeInnerHeight));
 
-  return { flapType, hasFlaps: true, outerHeight, innerHeight };
-}
+  // Inner flaps sized against L meet cleanly edge-to-edge at frontWidth * 0.5; only clamp if they exceed L/2.
+  const innerHeight =
+    innerBasis === 'L'
+      ? rawInnerHeight <= frontWidth * 0.5 + 0.01
+        ? rawInnerHeight
+        : roundMm(maxSafeInnerHeight)
+      : roundMm(Math.min(rawInnerHeight, maxSafeInnerHeight));
 
-type EdgeSide = 'top' | 'bottom';
-type WallKey = 'left' | 'front' | 'right' | 'back';
-
-interface EdgeFlapResult {
-  folds: Fold[];
-  faces: Face[];
-  wallFolds: Record<WallKey, string[]>;
-  wallAdjacent: Record<WallKey, string[]>;
+  const hasFlaps = outerHeight > 0 || innerHeight > 0;
+  return { flapType, hasFlaps, outerHeight, innerHeight };
 }
 
 function buildEdgeFlapsAndFolds(
@@ -127,18 +188,73 @@ function buildEdgeFlapsAndFolds(
   return { folds, faces, wallFolds, wallAdjacent };
 }
 
-function buildBottomAnchoredFoldGroups(
-  topFlapType: SupportedSlottedFlapType,
-  bottomFlapType: Exclude<SupportedSlottedFlapType, 'none'>,
-): FoldGroup[] {
-  const hasTop = topFlapType !== 'none';
-  const topLeft = hasTop ? ['top-flap-left'] : [];
-  const topFront = hasTop ? ['top-flap-front'] : [];
-  const topRight = hasTop ? ['top-flap-right'] : [];
-  const topBack = hasTop ? ['top-flap-back'] : [];
+function appendTopFlapFoldGroups(
+  groups: FoldGroup[],
+  topOuterOverlaps: boolean,
+  innerStage: [number, number],
+  outerMeetStage: [number, number],
+  outerBackOverlapStage: [number, number],
+  outerFrontOverlapStage: [number, number],
+  applyOutwardOffset: boolean,
+): void {
+  groups.push(
+    {
+      id: 'group-top-flap-left',
+      name: 'Top Left Inner Flap',
+      faceIds: ['top-flap-left'],
+      pivotFoldId: 'fold-left-top-flap',
+      animatedAngleRange: [0, 90],
+      foldStage: innerStage,
+      layerOrder: 0,
+    },
+    {
+      id: 'group-top-flap-right',
+      name: 'Top Right Inner Flap',
+      faceIds: ['top-flap-right'],
+      pivotFoldId: 'fold-right-top-flap',
+      animatedAngleRange: [0, 90],
+      foldStage: innerStage,
+      layerOrder: 0,
+    },
+    {
+      id: 'group-top-flap-back',
+      name: 'Top Back Outer Flap',
+      faceIds: ['top-flap-back'],
+      pivotFoldId: 'fold-back-top-flap',
+      animatedAngleRange: [0, 90],
+      foldStage: topOuterOverlaps ? outerBackOverlapStage : outerMeetStage,
+      layerOrder: 1,
+      ...(applyOutwardOffset ? { layerOffsetDirection: -1 as const, layerOffsetTier: 1 } : {}),
+    },
+    {
+      id: 'group-top-flap-front',
+      name: 'Top Front Outer Flap',
+      faceIds: ['top-flap-front'],
+      pivotFoldId: 'fold-front-top-flap',
+      animatedAngleRange: [0, 90],
+      foldStage: topOuterOverlaps ? outerFrontOverlapStage : outerMeetStage,
+      layerOrder: topOuterOverlaps ? 2 : 1,
+      ...(applyOutwardOffset
+        ? { layerOffsetDirection: -1 as const, layerOffsetTier: topOuterOverlaps ? 2 : 1 }
+        : {}),
+    },
+  );
+}
 
-  const bottomInnerTier = bottomFlapType === 'full' ? 2 : 1;
-  const bottomBackTier = bottomFlapType === 'full' ? 1 : 0;
+function buildBottomAnchoredFoldGroups(
+  hasTopFlaps: boolean,
+  hasGlueTab: boolean,
+  topOuterOverlaps: boolean,
+  bottomOuterOverlaps: boolean,
+): FoldGroup[] {
+  const topLeft = hasTopFlaps ? ['top-flap-left'] : [];
+  const topFront = hasTopFlaps ? ['top-flap-front'] : [];
+  const topRight = hasTopFlaps ? ['top-flap-right'] : [];
+  const topBack = hasTopFlaps ? ['top-flap-back'] : [];
+  const glueFace = hasGlueTab ? ['glue-tab'] : [];
+
+  const bottomInnerTier = bottomOuterOverlaps ? 2 : 1;
+  const bottomBackTier = bottomOuterOverlaps ? 1 : 0;
 
   const groups: FoldGroup[] = [
     {
@@ -147,7 +263,7 @@ function buildBottomAnchoredFoldGroups(
       faceIds: [
         'front',
         'left',
-        'glue-tab',
+        ...glueFace,
         'right',
         'back',
         ...topLeft,
@@ -165,20 +281,24 @@ function buildBottomAnchoredFoldGroups(
     {
       id: 'group-left-wall',
       name: 'Left Wall Assembly',
-      faceIds: ['left', 'glue-tab', ...topLeft, 'bottom-flap-left'],
+      faceIds: ['left', ...glueFace, ...topLeft, 'bottom-flap-left'],
       pivotFoldId: 'fold-left-front',
       animatedAngleRange: [0, 90],
       foldStage: [30, 60],
     },
-    {
-      id: 'group-glue-tab',
-      name: 'Glue Tab',
-      faceIds: ['glue-tab'],
-      pivotFoldId: 'fold-glue-left',
-      animatedAngleRange: [0, 90],
-      foldStage: [30, 60],
-      layerOrder: 0,
-    },
+    ...(hasGlueTab
+      ? [
+          {
+            id: 'group-glue-tab',
+            name: 'Glue Tab',
+            faceIds: ['glue-tab'],
+            pivotFoldId: 'fold-glue-left',
+            animatedAngleRange: [0, 90] as [number, number],
+            foldStage: [30, 60] as [number, number],
+            layerOrder: 0,
+          },
+        ]
+      : []),
     {
       id: 'group-bottom-flap-left',
       name: 'Bottom Left Inner Flap',
@@ -231,86 +351,53 @@ function buildBottomAnchoredFoldGroups(
     },
   ];
 
-  if (hasTop) {
-    const isFullTop = topFlapType === 'full';
-    groups.push(
-      {
-        id: 'group-top-flap-left',
-        name: 'Top Left Inner Flap',
-        faceIds: ['top-flap-left'],
-        pivotFoldId: 'fold-left-top-flap',
-        animatedAngleRange: [0, 90],
-        foldStage: [55, 78],
-        layerOrder: 0,
-      },
-      {
-        id: 'group-top-flap-right',
-        name: 'Top Right Inner Flap',
-        faceIds: ['top-flap-right'],
-        pivotFoldId: 'fold-right-top-flap',
-        animatedAngleRange: [0, 90],
-        foldStage: [55, 78],
-        layerOrder: 0,
-      },
-      {
-        id: 'group-top-flap-back',
-        name: 'Top Back Outer Flap',
-        faceIds: ['top-flap-back'],
-        pivotFoldId: 'fold-back-top-flap',
-        animatedAngleRange: [0, 90],
-        foldStage: isFullTop ? [68, 84] : [72, 90],
-        layerOrder: 1,
-        layerOffsetDirection: -1,
-        layerOffsetTier: 1,
-      },
-      {
-        id: 'group-top-flap-front',
-        name: 'Top Front Outer Flap',
-        faceIds: ['top-flap-front'],
-        pivotFoldId: 'fold-front-top-flap',
-        animatedAngleRange: [0, 90],
-        foldStage: isFullTop ? [76, 90] : [72, 90],
-        layerOrder: isFullTop ? 2 : 1,
-        layerOffsetDirection: -1,
-        layerOffsetTier: isFullTop ? 2 : 1,
-      },
-    );
+  if (hasTopFlaps) {
+    // Sequence strictly: 1) walls [30, 60] -> 2) inner flaps [60, 75] -> 3) outer flaps [75, 90]
+    appendTopFlapFoldGroups(groups, topOuterOverlaps, [60, 75], [75, 90], [75, 83], [82, 90], true);
   }
 
   return groups;
 }
 
-function buildFrontAnchoredFoldGroups(topFlapType: SupportedSlottedFlapType): FoldGroup[] {
-  const hasTop = topFlapType !== 'none';
-  const topLeft = hasTop ? ['top-flap-left'] : [];
-  const topRight = hasTop ? ['top-flap-right'] : [];
-  const topBack = hasTop ? ['top-flap-back'] : [];
+function buildFrontAnchoredFoldGroups(
+  hasTopFlaps: boolean,
+  hasGlueTab: boolean,
+  topOuterOverlaps: boolean,
+): FoldGroup[] {
+  const topLeft = hasTopFlaps ? ['top-flap-left'] : [];
+  const topRight = hasTopFlaps ? ['top-flap-right'] : [];
+  const topBack = hasTopFlaps ? ['top-flap-back'] : [];
+  const glueFace = hasGlueTab ? ['glue-tab'] : [];
 
   const groups: FoldGroup[] = [
     {
       id: 'group-left-wall',
       name: 'Left Wall Assembly',
-      faceIds: ['left', 'glue-tab', ...topLeft],
+      faceIds: ['left', ...glueFace, ...topLeft],
       pivotFoldId: 'fold-left-front',
       animatedAngleRange: [0, 90],
-      foldStage: [0, 50],
+      foldStage: [0, 45],
     },
-    {
-      id: 'group-glue-tab',
-      name: 'Glue Tab',
-      faceIds: ['glue-tab'],
-      pivotFoldId: 'fold-glue-left',
-      animatedAngleRange: [0, 90],
-      foldStage: [0, 50],
-      layerOrder: 0,
-    },
+    ...(hasGlueTab
+      ? [
+          {
+            id: 'group-glue-tab',
+            name: 'Glue Tab',
+            faceIds: ['glue-tab'],
+            pivotFoldId: 'fold-glue-left',
+            animatedAngleRange: [0, 90] as [number, number],
+            foldStage: [0, 45] as [number, number],
+            layerOrder: 0,
+          },
+        ]
+      : []),
     {
       id: 'group-right-wall',
       name: 'Right Wall Assembly',
       faceIds: ['right', ...topRight, 'back', ...topBack],
       pivotFoldId: 'fold-front-right',
       animatedAngleRange: [0, 90],
-      foldStage: [0, 50],
+      foldStage: [0, 45],
     },
     {
       id: 'group-back-wall',
@@ -318,71 +405,37 @@ function buildFrontAnchoredFoldGroups(topFlapType: SupportedSlottedFlapType): Fo
       faceIds: ['back', ...topBack],
       pivotFoldId: 'fold-right-back',
       animatedAngleRange: [0, 90],
-      foldStage: [0, 50],
+      foldStage: [0, 45],
     },
   ];
 
-  if (hasTop) {
-    const isFullTop = topFlapType === 'full';
-    groups.push(
-      {
-        id: 'group-top-flap-left',
-        name: 'Top Left Inner Flap',
-        faceIds: ['top-flap-left'],
-        pivotFoldId: 'fold-left-top-flap',
-        animatedAngleRange: [0, 90],
-        foldStage: [35, 70],
-        layerOrder: 0,
-      },
-      {
-        id: 'group-top-flap-right',
-        name: 'Top Right Inner Flap',
-        faceIds: ['top-flap-right'],
-        pivotFoldId: 'fold-right-top-flap',
-        animatedAngleRange: [0, 90],
-        foldStage: [35, 70],
-        layerOrder: 0,
-      },
-      {
-        id: 'group-top-flap-back',
-        name: 'Top Back Outer Flap',
-        faceIds: ['top-flap-back'],
-        pivotFoldId: 'fold-back-top-flap',
-        animatedAngleRange: [0, 90],
-        foldStage: isFullTop ? [55, 82] : [55, 90],
-        layerOrder: 1,
-      },
-      {
-        id: 'group-top-flap-front',
-        name: 'Top Front Outer Flap',
-        faceIds: ['top-flap-front'],
-        pivotFoldId: 'fold-front-top-flap',
-        animatedAngleRange: [0, 90],
-        foldStage: isFullTop ? [65, 90] : [55, 90],
-        layerOrder: isFullTop ? 2 : 1,
-      },
-    );
+  if (hasTopFlaps) {
+    appendTopFlapFoldGroups(groups, topOuterOverlaps, [45, 68], [68, 90], [68, 80], [78, 90], true);
   }
 
   return groups;
 }
 
 /**
- * Generates a parametric FEFCO slotted shipping carton dieline from a declarative `FefcoConfig`.
- * Supports independent top/bottom flap architectures (`none`, `rsc`, `full`) and anchors standing
- * cartons on `'bottom-flap-front'` (`Y = 0`) whenever bottom flaps are present.
+ * Generates a parametric FEFCO 02xx slotted container dieline from a declarative `FefcoConfig`.
+ * Supports independent top/bottom flap types (`none`, `rsc`, `full`, `extended`, `custom`),
+ * configurable `flapMath` ratios relative to `W` or `L`, and optional glue tab (`hasGlueTab`).
  */
 export function generateFefcoBox(config: FefcoConfig, dimensions: Dieline['dimensions']): Dieline {
   validateDimensions(dimensions);
 
-  const topFlapType = resolveSupportedFlapType('top', config.flapConfig.top);
-  const bottomFlapType = resolveSupportedFlapType('bottom', config.flapConfig.bottom);
+  const rawTopType = config.topFlapType ?? config.flapConfig?.top;
+  const rawBottomType = config.bottomFlapType ?? config.flapConfig?.bottom;
+  const topFlapType = resolveSupportedFlapType('top', rawTopType);
+  const bottomFlapType = resolveSupportedFlapType('bottom', rawBottomType);
+  const hasGlueTab = config.hasGlueTab ?? true;
 
   const { length, width, height, thickness, bleedSize } = dimensions;
 
   const minFootprint = Math.min(length, width);
-  const glueWidth =
-    minFootprint >= 150
+  const glueWidth = !hasGlueTab
+    ? 0
+    : minFootprint >= 150
       ? 35
       : minFootprint >= 60
         ? 30
@@ -401,19 +454,38 @@ export function generateFefcoBox(config: FefcoConfig, dimensions: Dieline['dimen
   const x4 = roundMm(x3 + rightWidth);
   const x5 = roundMm(x4 + backWidth);
 
-  const glueTaper = roundMm(Math.min(10, bodyHeight * 0.15, glueWidth * 0.35));
+  const glueTaper = hasGlueTab ? roundMm(Math.min(10, bodyHeight * 0.15, glueWidth * 0.35)) : 0;
   const baseSlotHalf = Math.max(1.5, thickness * 1.5 + 1);
   const flapInset = roundMm(Math.min(leftWidth * 0.08, frontWidth * 0.08, baseSlotHalf));
 
-  const topMetrics = computeEdgeFlapMetrics(topFlapType, leftWidth, frontWidth, thickness);
-  const bottomMetrics = computeEdgeFlapMetrics(bottomFlapType, leftWidth, frontWidth, thickness);
+  const topMetrics = computeEdgeFlapMetrics(
+    'top',
+    topFlapType,
+    config.flapMath,
+    leftWidth,
+    frontWidth,
+    thickness,
+  );
+  const bottomMetrics = computeEdgeFlapMetrics(
+    'bottom',
+    bottomFlapType,
+    config.flapMath,
+    leftWidth,
+    frontWidth,
+    thickness,
+  );
+
+  const topMaxHeight = Math.max(topMetrics.outerHeight, topMetrics.innerHeight);
+  const bottomMaxHeight = Math.max(bottomMetrics.outerHeight, bottomMetrics.innerHeight);
 
   const y0 = 0;
-  const yBodyTop = topMetrics.outerHeight;
+  const yBodyTop = roundMm(topMaxHeight);
+  const yTopOuter = roundMm(yBodyTop - topMetrics.outerHeight);
   const yTopInner = roundMm(yBodyTop - topMetrics.innerHeight);
   const yBodyBot = roundMm(yBodyTop + bodyHeight);
+  const yBotOuter = roundMm(yBodyBot + bottomMetrics.outerHeight);
   const yBotInner = roundMm(yBodyBot + bottomMetrics.innerHeight);
-  const yMax = roundMm(yBodyBot + bottomMetrics.outerHeight);
+  const yMax = roundMm(yBodyBot + bottomMaxHeight);
 
   const wallSpans: Record<WallKey, { xStart: number; xEnd: number; flapWidth: number }> = {
     left: { xStart: x1, xEnd: x2, flapWidth: roundMm(leftWidth - 2 * flapInset) },
@@ -432,7 +504,16 @@ export function generateFefcoBox(config: FefcoConfig, dimensions: Dieline['dimen
   );
 
   const folds: Fold[] = [
-    { id: 'fold-glue-left', from: { x: x1, y: yBodyTop }, to: { x: x1, y: yBodyBot }, angle: 90 },
+    ...(hasGlueTab
+      ? [
+          {
+            id: 'fold-glue-left',
+            from: { x: x1, y: yBodyTop },
+            to: { x: x1, y: yBodyBot },
+            angle: 90,
+          },
+        ]
+      : []),
     { id: 'fold-left-front', from: { x: x2, y: yBodyTop }, to: { x: x2, y: yBodyBot }, angle: 90 },
     { id: 'fold-front-right', from: { x: x3, y: yBodyTop }, to: { x: x3, y: yBodyBot }, angle: 90 },
     { id: 'fold-right-back', from: { x: x4, y: yBodyTop }, to: { x: x4, y: yBodyBot }, angle: 90 },
@@ -495,25 +576,29 @@ export function generateFefcoBox(config: FefcoConfig, dimensions: Dieline['dimen
       name: 'Left Side',
       path: rectPath(x1, yBodyTop, leftWidth, bodyHeight),
       folds: [
-        'fold-glue-left',
+        ...(hasGlueTab ? ['fold-glue-left'] : []),
         'fold-left-front',
         ...topFlapResult.wallFolds.left,
         ...bottomFlapResult.wallFolds.left,
       ],
       adjacentFaces: [
-        'glue-tab',
+        ...(hasGlueTab ? ['glue-tab'] : []),
         'front',
         ...topFlapResult.wallAdjacent.left,
         ...bottomFlapResult.wallAdjacent.left,
       ],
     },
-    {
-      id: 'glue-tab',
-      name: 'Glue Tab',
-      path: buildGlueTabPath(x0, x1, yBodyTop, yBodyBot, glueTaper),
-      folds: ['fold-glue-left'],
-      adjacentFaces: ['left'],
-    },
+    ...(hasGlueTab
+      ? [
+          {
+            id: 'glue-tab',
+            name: 'Glue Tab',
+            path: buildGlueTabPath(x0, x1, yBodyTop, yBodyBot, glueTaper),
+            folds: ['fold-glue-left'],
+            adjacentFaces: ['left'],
+          },
+        ]
+      : []),
     ...topFlapResult.faces,
     ...bottomFlapResult.faces,
   ];
@@ -526,26 +611,37 @@ export function generateFefcoBox(config: FefcoConfig, dimensions: Dieline['dimen
     x4,
     x5,
     y0,
+    yTopOuter,
     yTopInner,
     yBodyTop,
     yBodyBot,
     yBotInner,
+    yBotOuter,
     yMax,
     flapInset,
     glueTaper,
     bleedSize,
     hasTopFlaps: topMetrics.hasFlaps,
     hasBottomFlaps: bottomMetrics.hasFlaps,
+    hasGlueTab,
   };
 
   const cuts: Cut[] = [{ id: 'cut-perimeter', path: buildSlottedCutPath(layoutParams) }];
   const bleeds: Bleed[] = [{ id: 'bleed-perimeter', path: buildSlottedBleedPath(layoutParams) }];
 
-  const baseFaceId = bottomFlapType === 'none' ? 'front' : 'bottom-flap-front';
-  const foldGroups =
-    bottomFlapType === 'none'
-      ? buildFrontAnchoredFoldGroups(topFlapType)
-      : buildBottomAnchoredFoldGroups(topFlapType, bottomFlapType);
+  const topOuterOverlaps = topMetrics.hasFlaps && topMetrics.outerHeight * 2 > leftWidth + 0.01;
+  const bottomOuterOverlaps =
+    bottomMetrics.hasFlaps && bottomMetrics.outerHeight * 2 > leftWidth + 0.01;
+
+  const baseFaceId = bottomMetrics.hasFlaps ? 'bottom-flap-front' : 'front';
+  const foldGroups = bottomMetrics.hasFlaps
+    ? buildBottomAnchoredFoldGroups(
+        topMetrics.hasFlaps,
+        hasGlueTab,
+        topOuterOverlaps,
+        bottomOuterOverlaps,
+      )
+    : buildFrontAnchoredFoldGroups(topMetrics.hasFlaps, hasGlueTab, topOuterOverlaps);
 
   return {
     archetype: config.id,

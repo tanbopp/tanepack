@@ -3,8 +3,9 @@ import Box from '@mui/material/Box';
 import Card from '@mui/material/Card';
 import CardActions from '@mui/material/CardActions';
 import CardContent from '@mui/material/CardContent';
+import Chip from '@mui/material/Chip';
 import Typography from '@mui/material/Typography';
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { DielinePreviewSvg } from '@widgets/dieline-preview';
 import { type Dieline, generateDieline } from '@entities/dieline';
@@ -21,10 +22,18 @@ const DEFAULT_BLEED_MM = 3;
 
 export default function TemplatesPage() {
   const navigate = useNavigate();
+  const [selectedCategory, setSelectedCategory] = useState<string>('All');
+
+  const categories = useMemo<readonly string[]>(
+    () => ['All', ...Array.from(new Set(PACKAGING_CATALOG_MODELS.map((model) => model.category)))],
+    [],
+  );
 
   const catalogEntries = useMemo<readonly CatalogCardEntry[]>(
     () =>
-      PACKAGING_CATALOG_MODELS.map((model) => ({
+      PACKAGING_CATALOG_MODELS.filter(
+        (model) => selectedCategory === 'All' || model.category === selectedCategory,
+      ).map((model) => ({
         model,
         dieline: generateDieline(model.archetype, {
           ...model.defaultDimensions,
@@ -32,7 +41,7 @@ export default function TemplatesPage() {
           bleedSize: DEFAULT_BLEED_MM,
         }),
       })),
-    [],
+    [selectedCategory],
   );
 
   const handleCustomize = (model: PackagingCatalogModel) => {
@@ -87,6 +96,28 @@ export default function TemplatesPage() {
         >
           Blank Editor
         </M3Button>
+      </Box>
+
+      {/* Category Filter Strip */}
+      <Box
+        role="group"
+        aria-label="Catalog categories"
+        sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, alignItems: 'center' }}
+      >
+        {categories.map((category) => {
+          const isSelected = selectedCategory === category;
+          return (
+            <Chip
+              key={category}
+              label={category}
+              clickable
+              color={isSelected ? 'primary' : 'default'}
+              variant={isSelected ? 'filled' : 'outlined'}
+              onClick={() => setSelectedCategory(category)}
+              sx={{ borderRadius: '9999px', fontWeight: isSelected ? 600 : 500 }}
+            />
+          );
+        })}
       </Box>
 
       {/* Responsive M3 Catalog Grid */}

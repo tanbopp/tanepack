@@ -5,7 +5,17 @@ import { generateFefcoBox } from './fefcoFactory.ts';
 export const FEFCO_0201_CONFIG: FefcoConfig = {
   id: 'fefco-0201',
   name: 'FEFCO 0201 (RSC)',
-  flapConfig: { top: 'rsc', bottom: 'rsc' },
+  topFlapType: 'rsc',
+  bottomFlapType: 'rsc',
+  flapMath: {
+    topOuter: 0.5,
+    bottomOuter: 0.5,
+    inner: 0.5,
+    topOuterBasis: 'W',
+    bottomOuterBasis: 'W',
+    innerBasis: 'W',
+  },
+  hasGlueTab: true,
   panelStyle: 'standard',
 };
 

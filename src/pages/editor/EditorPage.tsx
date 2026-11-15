@@ -9,6 +9,7 @@ import InputAdornment from '@mui/material/InputAdornment';
 import InputLabel from '@mui/material/InputLabel';
 import ListItemIcon from '@mui/material/ListItemIcon';
 import ListItemText from '@mui/material/ListItemText';
+import ListSubheader from '@mui/material/ListSubheader';
 import Menu from '@mui/material/Menu';
 import MenuItem from '@mui/material/MenuItem';
 import Paper from '@mui/material/Paper';
@@ -1723,11 +1724,30 @@ export default function EditorPage() {
                     backgroundColor: 'var(--md-sys-color-surface-container-highest)',
                   }}
                 >
-                  {DIELINE_ARCHETYPE_OPTIONS.map((option) => (
-                    <MenuItem key={option.id} value={option.id}>
-                      {option.label}
-                    </MenuItem>
-                  ))}
+                  {Array.from(
+                    new Set(DIELINE_ARCHETYPE_OPTIONS.map((option) => option.group)),
+                  ).flatMap((group) => [
+                    <ListSubheader
+                      key={`header-${group}`}
+                      disableSticky
+                      sx={{
+                        fontSize: '0.75rem',
+                        fontWeight: 700,
+                        lineHeight: '28px',
+                        color: 'var(--md-sys-color-primary)',
+                        backgroundColor: 'var(--md-sys-color-surface-container-low)',
+                      }}
+                    >
+                      {group}
+                    </ListSubheader>,
+                    ...DIELINE_ARCHETYPE_OPTIONS.filter((option) => option.group === group).map(
+                      (option) => (
+                        <MenuItem key={option.id} value={option.id}>
+                          {option.label}
+                        </MenuItem>
+                      ),
+                    ),
+                  ])}
                 </Select>
               </FormControl>
 

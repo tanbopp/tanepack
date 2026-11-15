@@ -5,7 +5,17 @@ import { generateFefcoBox } from './fefcoFactory.ts';
 export const FEFCO_0203_CONFIG: FefcoConfig = {
   id: 'fefco-0203',
   name: 'FEFCO 0203 (Full Overlap)',
-  flapConfig: { top: 'full', bottom: 'full' },
+  topFlapType: 'full',
+  bottomFlapType: 'full',
+  flapMath: {
+    topOuter: 1,
+    bottomOuter: 1,
+    inner: 1,
+    topOuterBasis: 'W',
+    bottomOuterBasis: 'W',
+    innerBasis: 'W',
+  },
+  hasGlueTab: true,
   panelStyle: 'standard',
 };
 

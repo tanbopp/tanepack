@@ -1,0 +1,28 @@
+// Parametric dieline generator for FEFCO 0204 (Center Special Slotted Container)
+import type { Dieline, FefcoConfig } from '@entities/dieline/types';
+import { generateFefcoBox } from './fefcoFactory.ts';
+
+export const FEFCO_0204_CONFIG: FefcoConfig = {
+  id: 'fefco-0204',
+  name: 'FEFCO 0204 (Center Special Slotted)',
+  topFlapType: 'custom',
+  bottomFlapType: 'custom',
+  flapMath: {
+    topOuter: 0.5,
+    bottomOuter: 0.5,
+    inner: 0.5,
+    topOuterBasis: 'W',
+    bottomOuterBasis: 'W',
+    innerBasis: 'L',
+  },
+  hasGlueTab: true,
+  panelStyle: 'standard',
+};
+
+/**
+ * Generates a 13-face FEFCO 0204 Center Special Slotted Container where outer flaps measure `½ W`
+ * and inner flaps measure `½ L` so both inner and outer pairs meet cleanly at the carton center.
+ */
+export function generateFefco0204(dimensions: Dieline['dimensions']): Dieline {
+  return generateFefcoBox(FEFCO_0204_CONFIG, dimensions);
+}
