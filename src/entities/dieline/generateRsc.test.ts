@@ -18,6 +18,7 @@ describe('generateRsc (FEFCO 0201)', () => {
     const dieline = generateRsc(SHIPPING_SMALL);
 
     expect(dieline.archetype).toBe('fefco-0201');
+    expect(dieline.baseFaceId).toBe('bottom-flap-front');
     expect(dieline.unit).toBe('mm');
 
     // glue(35) + 2*(300+0.5) + 2*(200+0.5) = 35 + 601 + 401 = 1037 mm
@@ -108,8 +109,17 @@ describe('generateRsc (FEFCO 0201)', () => {
       expect(path).not.toMatch(DECIMAL_OVER_TWO_REGEX);
     }
 
+    const frontAssembly = dieline.foldGroups.find((g) => g.id === 'group-front-assembly')!;
+    const bottomLeft = dieline.foldGroups.find((g) => g.id === 'group-bottom-flap-left')!;
+    const leftWall = dieline.foldGroups.find((g) => g.id === 'group-left-wall')!;
     const innerTopLeft = dieline.foldGroups.find((g) => g.id === 'group-top-flap-left')!;
     const outerTopFront = dieline.foldGroups.find((g) => g.id === 'group-top-flap-front')!;
+
+    expect(frontAssembly.pivotFoldId).toBe('fold-front-bottom-flap');
+    expect(frontAssembly.foldStage).toEqual([0, 30]);
+    expect(bottomLeft.foldStage).toEqual([0, 30]);
+    expect(bottomLeft.layerOffsetDirection).toBe(1);
+    expect(leftWall.foldStage).toEqual([30, 60]);
     expect(innerTopLeft.animatedAngleRange).toEqual([0, 90]);
     expect(outerTopFront.animatedAngleRange).toEqual([0, 90]);
     expect(innerTopLeft.layerOrder).toBe(0);

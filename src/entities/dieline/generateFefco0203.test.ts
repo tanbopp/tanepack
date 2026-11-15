@@ -15,6 +15,7 @@ describe('generateFefco0203 (Full Overlap)', () => {
     const dieline = generateFefco0203(SHIPPING_SMALL);
 
     expect(dieline.archetype).toBe('fefco-0203');
+    expect(dieline.baseFaceId).toBe('bottom-flap-front');
     expect(dieline.totalWidth).toBe(1037);
     // H_eff(150.5) + topOuter(200.5) + botOuter(200.5) = 551.5 mm
     expect(dieline.totalHeight).toBe(551.5);
@@ -50,20 +51,25 @@ describe('generateFefco0203 (Full Overlap)', () => {
     expect(topInnerLeft.height).toBeLessThan(topOuterFront.height);
   });
 
-  it('staggers Back outer and Front outer foldGroups with distinct layerOrder to prevent 3D Z-fighting', () => {
+  it('staggers Back outer and Front outer foldGroups with distinct layerOrder and inward bottom stacking', () => {
     const dieline = generateFefco0203(SHIPPING_SMALL);
 
     const innerLeft = dieline.foldGroups.find((g) => g.id === 'group-top-flap-left')!;
     const backOuterTop = dieline.foldGroups.find((g) => g.id === 'group-top-flap-back')!;
     const frontOuterTop = dieline.foldGroups.find((g) => g.id === 'group-top-flap-front')!;
-    const backOuterBot = dieline.foldGroups.find((g) => g.id === 'group-bottom-flap-back')!;
-    const frontOuterBot = dieline.foldGroups.find((g) => g.id === 'group-bottom-flap-front')!;
+    const botBackOuter = dieline.foldGroups.find((g) => g.id === 'group-bottom-flap-back')!;
+    const botLeftInner = dieline.foldGroups.find((g) => g.id === 'group-bottom-flap-left')!;
 
+    expect(dieline.foldGroups.some((g) => g.id === 'group-bottom-flap-front')).toBe(false);
     expect(innerLeft.layerOrder).toBe(0);
     expect(backOuterTop.layerOrder).toBe(1);
     expect(frontOuterTop.layerOrder).toBe(2);
-    expect(backOuterBot.layerOrder).toBe(1);
-    expect(frontOuterBot.layerOrder).toBe(2);
+
+    // Bottom flaps stack upward inside box above anchored bottom-flap-front (Y = 0)
+    expect(botBackOuter.layerOffsetDirection).toBe(1);
+    expect(botBackOuter.layerOffsetTier).toBe(1);
+    expect(botLeftInner.layerOffsetDirection).toBe(1);
+    expect(botLeftInner.layerOffsetTier).toBe(2);
 
     // Inner closes first, Back outer closes underneath second, Front outer closes on top last
     expect(innerLeft.foldStage![1]).toBeLessThan(backOuterTop.foldStage![1]);

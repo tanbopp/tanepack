@@ -357,15 +357,36 @@ export function BoxViewer({
     };
   }, [edgeMaterial, shadowTexture]);
 
-  // Smoothly tighten contact shadow footprint as side panels fold from 0° flat to 90° closed
+  // Smoothly align contact shadow footprint & camera target with stationary baseFaceId
   const foldProgress = Math.min(1, Math.max(0, foldAngle / 90));
   const activeDimensions = dieline.dimensions;
+  const isBottomAnchored = dieline.baseFaceId === 'bottom-flap-front';
   const frontWidth3d = (activeDimensions.length + activeDimensions.thickness) * DIELINE_SCALE_TO_3D;
-  const frontDepth3d = (activeDimensions.height + activeDimensions.thickness) * DIELINE_SCALE_TO_3D;
+  const frontDepth3d =
+    (isBottomAnchored
+      ? activeDimensions.width + activeDimensions.thickness
+      : activeDimensions.height + activeDimensions.thickness) * DIELINE_SCALE_TO_3D;
+  const bottomRootBounds = model.root.faces[0]?.boundsMm;
+  const botFlapDepthMm = bottomRootBounds ? bottomRootBounds.maxY - bottomRootBounds.minY : 0;
+  const foldedCenterZ = isBottomAnchored
+    ? (activeDimensions.width + activeDimensions.thickness - botFlapDepthMm) *
+      0.5 *
+      DIELINE_SCALE_TO_3D
+    : 0;
+  const sheetCenterOffsetZ =
+    (dieline.totalHeight * 0.5 - model.root.pivotMm.y) * DIELINE_SCALE_TO_3D;
+  const shadowZ = THREE.MathUtils.lerp(sheetCenterOffsetZ, foldedCenterZ, foldProgress);
   const shadowWidth =
     THREE.MathUtils.lerp(model.shadowExtent.width, frontWidth3d * 1.35, foldProgress) * 1.15;
   const shadowDepth =
     THREE.MathUtils.lerp(model.shadowExtent.depth, frontDepth3d * 1.35, foldProgress) * 1.15;
+  const orbitTarget: [number, number, number] = isBottomAnchored
+    ? [
+        0,
+        (activeDimensions.height + activeDimensions.thickness) * 0.4 * DIELINE_SCALE_TO_3D,
+        foldedCenterZ * 0.5,
+      ]
+    : [0.15, 0.15, 0];
 
   return (
     <Box
@@ -395,7 +416,7 @@ export function BoxViewer({
 
         {/* Subtle floor grid and radial gradient fake contact shadow */}
         <gridHelper args={[24, 48, '#c3b7a9', '#e2d9ce']} position={[0, -0.004, 0]} />
-        <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.002, 0]}>
+        <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.002, shadowZ]}>
           <planeGeometry args={[shadowWidth, shadowDepth]} />
           <meshBasicMaterial map={shadowTexture} transparent depthWrite={false} />
         </mesh>
@@ -412,7 +433,7 @@ export function BoxViewer({
 
         <OrbitControls
           makeDefault
-          target={[0.15, 0.15, 0]}
+          target={orbitTarget}
           enablePan
           enableZoom
           enableRotate

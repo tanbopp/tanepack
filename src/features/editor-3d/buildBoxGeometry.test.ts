@@ -1,7 +1,13 @@
 // Unit tests for procedural 3D shape conversion and forward-kinematics box folding
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
-import { generateFefco0203, generateRsc, generateTuckEndBox } from '@entities/dieline';
+import {
+  generateFefco0200,
+  generateFefco0203,
+  generateFefco0215,
+  generateRsc,
+  generateTuckEndBox,
+} from '@entities/dieline';
 import {
   buildBoxGeometry,
   computeNodeTargetAngleDeg,
@@ -318,7 +324,7 @@ describe('buildBoxGeometry', () => {
     largeModel.dispose();
   });
 
-  it('folds FEFCO 0201 side inner flaps underneath center-meeting outer flaps cleanly', () => {
+  it('anchors FEFCO 0201 on bottom-flap-front at Y=0, folds walls upward, and closes top flaps overhead', () => {
     const rsc = generateRsc({
       length: 300,
       width: 200,
@@ -328,25 +334,50 @@ describe('buildBoxGeometry', () => {
     });
     const model = buildBoxGeometry(rsc);
 
-    // At 70°, side inner flaps reach 90° closed before Front/Back outer flaps finish closing
-    const midBounds = computeFaceWorldBounds(model.root, 70);
-    expect(midBounds.get('top-flap-left')!.min.z).toBeCloseTo(-0.7525, 3);
-    expect(midBounds.get('top-flap-left')!.max.z).toBeCloseTo(-0.7525, 3);
-    expect(midBounds.get('top-flap-front')!.min.z).toBeLessThan(-0.76);
+    expect(model.root.id).toBe('root-bottom-flap-front');
 
-    // At 90°, Back & Front top outer flaps meet seamlessly in middle at y ≈ +1.0025 over side inner flaps
+    // At 0°, every panel lies completely flat on the Y = 0 floor plane
+    const flatBounds = computeFaceWorldBounds(model.root, 0);
+    for (const bounds of flatBounds.values()) {
+      expect(bounds.min.y).toBeCloseTo(0, 4);
+      expect(bounds.max.y).toBeCloseTo(0, 4);
+    }
+
+    // Across every folding angle 0°..90°, bottom-flap-front stays grounded at Y=0 and NO face dips below Y=0
+    for (const angle of [15, 30, 45, 60, 75, 90]) {
+      const boundsAtAngle = computeFaceWorldBounds(model.root, angle);
+      const baseBounds = boundsAtAngle.get('bottom-flap-front')!;
+      expect(baseBounds.min.y).toBeCloseTo(0, 4);
+      expect(baseBounds.max.y).toBeCloseTo(0, 4);
+      for (const bounds of boundsAtAngle.values()) {
+        expect(bounds.min.y).toBeGreaterThanOrEqual(-1e-4);
+      }
+    }
+
+    // At 78°, top inner flaps finish closing to 90° (Y = 1.505) before outer flaps finish closing ([72, 90])
+    const midBounds = computeFaceWorldBounds(model.root, 78);
+    expect(midBounds.get('front')!.max.y).toBeCloseTo(1.505, 3);
+    expect(midBounds.get('top-flap-left')!.min.y).toBeCloseTo(1.505, 3);
+    expect(midBounds.get('top-flap-left')!.max.y).toBeCloseTo(1.505, 3);
+    expect(midBounds.get('top-flap-front')!.max.y).toBeGreaterThan(1.51);
+
+    // At 90°, Front & Back top outer flaps meet seamlessly over inner flaps (+Y), and bottom inner flaps stack above Y=0
     const closedBounds = computeFaceWorldBounds(model.root, 90);
     const frontTop = closedBounds.get('top-flap-front')!;
     const backTop = closedBounds.get('top-flap-back')!;
-    const leftInner = closedBounds.get('top-flap-left')!;
+    const leftTopInner = closedBounds.get('top-flap-left')!;
+    const leftBotInner = closedBounds.get('bottom-flap-left')!;
+    const botFront = closedBounds.get('bottom-flap-front')!;
 
-    expect(frontTop.max.y).toBeCloseTo(backTop.min.y, 4);
-    expect(frontTop.min.z).toBeLessThan(leftInner.min.z);
+    expect(frontTop.max.z).toBeCloseTo(backTop.min.z, 4);
+    expect(backTop.max.z - frontTop.min.z).toBeCloseTo(2.005, 4);
+    expect(frontTop.min.y).toBeGreaterThan(leftTopInner.max.y);
+    expect(leftBotInner.min.y).toBeGreaterThan(botFront.max.y);
 
     model.dispose();
   });
 
-  it('folds FEFCO 0203 outer flaps into full overlap with distinct Z offset separation', () => {
+  it('folds FEFCO 0203 top and bottom overlapping flaps with clean vertical Y separation on floor', () => {
     const fosc = generateFefco0203({
       length: 300,
       width: 200,
@@ -355,27 +386,75 @@ describe('buildBoxGeometry', () => {
       bleedSize: 3,
     });
     const model = buildBoxGeometry(fosc);
-    const closedBounds = computeFaceWorldBounds(model.root, 90);
 
+    // Every panel stays on or above Y = 0 throughout the full fold range
+    for (const angle of [0, 30, 60, 90]) {
+      const boundsAtAngle = computeFaceWorldBounds(model.root, angle);
+      for (const bounds of boundsAtAngle.values()) {
+        expect(bounds.min.y).toBeGreaterThanOrEqual(-1e-4);
+      }
+    }
+
+    const closedBounds = computeFaceWorldBounds(model.root, 90);
     const topLeftInner = closedBounds.get('top-flap-left')!;
     const topBackOuter = closedBounds.get('top-flap-back')!;
     const topFrontOuter = closedBounds.get('top-flap-front')!;
 
-    // Both Front and Back outer flaps span the full 200.5mm Y opening (minus slot inset margin)
-    expect(topBackOuter.max.y - topBackOuter.min.y).toBeCloseTo(2.005, 3);
-    expect(topFrontOuter.max.y - topFrontOuter.min.y).toBeCloseTo(2.005, 3);
+    // Both Front and Back top outer flaps span full 200.5mm Z depth and stack upward (+Y)
+    expect(topBackOuter.max.z - topBackOuter.min.z).toBeCloseTo(2.005, 3);
+    expect(topFrontOuter.max.z - topFrontOuter.min.z).toBeCloseTo(2.005, 3);
+    expect(topFrontOuter.min.y).toBeGreaterThan(topBackOuter.min.y);
+    expect(topBackOuter.min.y).toBeGreaterThan(topLeftInner.min.y);
 
-    // Distinct outward Z separation (-Z top normal): frontOuter sits further outside than backOuter > inner
-    expect(topFrontOuter.min.z).toBeLessThan(topBackOuter.min.z);
-    expect(topBackOuter.min.z).toBeLessThan(topLeftInner.min.z);
-
-    // Bottom flaps overlap outward along +Z symmetrically: frontOuter (+Z) > backOuter > inner
+    // Bottom flaps stack monotonically upward inside box above floor (Y = 0)
     const botLeftInner = closedBounds.get('bottom-flap-left')!;
     const botBackOuter = closedBounds.get('bottom-flap-back')!;
     const botFrontOuter = closedBounds.get('bottom-flap-front')!;
-    expect(botFrontOuter.max.z).toBeGreaterThan(botBackOuter.max.z);
-    expect(botBackOuter.max.z).toBeGreaterThan(botLeftInner.max.z);
+    expect(botFrontOuter.min.y).toBeCloseTo(0, 4);
+    expect(botBackOuter.min.y).toBeGreaterThan(botFrontOuter.max.y);
+    expect(botLeftInner.min.y).toBeGreaterThan(botBackOuter.max.y);
 
     model.dispose();
+  });
+
+  it('folds FEFCO 0200 (open top) and FEFCO 0215 (Full Overlap top + RSC bottom) cleanly on Y=0', () => {
+    const hsc = generateFefco0200({
+      length: 300,
+      width: 200,
+      height: 150,
+      thickness: 0.5,
+      bleedSize: 3,
+    });
+    const hscModel = buildBoxGeometry(hsc);
+    const hscClosed = computeFaceWorldBounds(hscModel.root, 90);
+    expect(hscClosed.size).toBe(9);
+    expect(hscClosed.get('bottom-flap-front')!.min.y).toBeCloseTo(0, 4);
+    expect(hscClosed.get('front')!.max.y).toBeCloseTo(1.505, 3);
+    hscModel.dispose();
+
+    const mix = generateFefco0215({
+      length: 300,
+      width: 200,
+      height: 150,
+      thickness: 0.5,
+      bleedSize: 3,
+    });
+    const mixModel = buildBoxGeometry(mix);
+    const mixClosed = computeFaceWorldBounds(mixModel.root, 90);
+    expect(mixClosed.size).toBe(13);
+
+    // Top flaps use full 200.5mm overlap while bottom flaps use 100.25mm RSC center-meeting base on Y=0
+    const topFront = mixClosed.get('top-flap-front')!;
+    const topBack = mixClosed.get('top-flap-back')!;
+    const botFront = mixClosed.get('bottom-flap-front')!;
+    const botBack = mixClosed.get('bottom-flap-back')!;
+    expect(topFront.max.z - topFront.min.z).toBeCloseTo(2.005, 3);
+    expect(topFront.min.y).toBeGreaterThan(topBack.min.y);
+    expect(botFront.min.y).toBeCloseTo(0, 4);
+    expect(botBack.min.y).toBeCloseTo(0, 4);
+    expect(botFront.max.z - botFront.min.z).toBeCloseTo(1.0025, 3);
+    expect(botBack.max.z - botBack.min.z).toBeCloseTo(1.0025, 3);
+
+    mixModel.dispose();
   });
 });

@@ -369,6 +369,7 @@ export function generateTuckEndBox(dimensions: Dieline['dimensions']): Dieline {
 
   return {
     archetype: 'tuck-end',
+    baseFaceId: 'front',
     dimensions: {
       length,
       width,

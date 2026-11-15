@@ -15,6 +15,7 @@ describe('dieline entity types', () => {
     });
 
     expect(dieline.archetype).toBe('tuck-end');
+    expect(dieline.baseFaceId).toBe('front');
     expect(dieline.unit).toBe('mm');
     expect(dieline.dimensions).toEqual({
       length: 120,

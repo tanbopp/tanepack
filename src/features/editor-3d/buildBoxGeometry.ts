@@ -463,7 +463,7 @@ export function buildBoxGeometry(dieline: Dieline): KinematicBoxModel {
     faceBoundsMap.set(face.id, parsed.boundsMm);
   }
 
-  // Faces not moved by any FoldGroup belong to the stationary root (Front panel)
+  // Anchor explicitly declared baseFaceId (fallback to first ungrouped face) stationary at Y = 0
   const groupedFaceIds = new Set<string>();
   for (const group of dieline.foldGroups) {
     for (const faceId of group.faceIds) {
@@ -471,11 +471,16 @@ export function buildBoxGeometry(dieline: Dieline): KinematicBoxModel {
     }
   }
 
-  const rootFaces = dieline.faces.filter((face) => !groupedFaceIds.has(face.id));
-  const primaryRootFace = rootFaces[0] ?? dieline.faces[0];
+  const ungroupedFaces = dieline.faces.filter((face) => !groupedFaceIds.has(face.id));
+  const explicitBaseFace = dieline.baseFaceId ? faceMap.get(dieline.baseFaceId) : undefined;
+  const primaryRootFace = explicitBaseFace ?? ungroupedFaces[0] ?? dieline.faces[0];
   if (!primaryRootFace) {
     throw new Error('Dieline contains no faces to construct 3D geometry.');
   }
+
+  const rootFaces = ungroupedFaces.some((f) => f.id === primaryRootFace.id)
+    ? [primaryRootFace, ...ungroupedFaces.filter((f) => f.id !== primaryRootFace.id)]
+    : [primaryRootFace];
 
   const rootBounds = faceBoundsMap.get(primaryRootFace.id);
   const rootPivotMm: Point = rootBounds?.center ?? {
@@ -562,8 +567,11 @@ export function buildBoxGeometry(dieline: Dieline): KinematicBoxModel {
 
     const foldStage: [number, number] = group.foldStage ?? [0, 90];
     const layerOrder = group.layerOrder ?? null;
-    const layerOffsetWorld =
-      layerOrder !== null && layerOrder > 0 ? layerOrder * thicknessStepWorld : 0;
+    const layerOffsetDirection = group.layerOffsetDirection ?? -1;
+    const rawTier =
+      group.layerOffsetTier ?? (layerOrder !== null && layerOrder > 0 ? layerOrder : 0);
+    // BoxViewer translates child faces along local -Y * progress; invert sign when stepping inward (+1)
+    const layerOffsetWorld = rawTier > 0 ? -layerOffsetDirection * rawTier * thicknessStepWorld : 0;
 
     for (const faceId of directFaceIds) {
       const face = faceMap.get(faceId);
@@ -684,7 +692,7 @@ export function buildBoxGeometry(dieline: Dieline): KinematicBoxModel {
   });
 
   const root: KinematicBoxNode = {
-    id: 'root-front',
+    id: `root-${primaryRootFace.id}`,
     name: primaryRootFace.name,
     position: [0, 0, 0],
     pivotMm: rootPivotMm,

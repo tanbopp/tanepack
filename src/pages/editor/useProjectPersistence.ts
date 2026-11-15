@@ -289,16 +289,23 @@ export function useProjectPersistence(): ProjectPersistenceState {
     projectCreatedAtRef.current = loaded.createdAt || new Date().toISOString();
     insideElementsRef.current = loaded.layers.inside;
 
+    const hydratedArchetype = loaded.dieline.archetype ?? 'tuck-end';
+    const hydratedDieline = {
+      ...loaded.dieline,
+      archetype: hydratedArchetype,
+      baseFaceId: loaded.dieline.baseFaceId ?? 'front',
+    };
+
     syncedSnapshotRef.current = {
-      dieline: loaded.dieline,
+      dieline: hydratedDieline,
       committedElements: outsideElements,
       name: nextName,
     };
 
     useEditorStore.setState({
-      archetype: loaded.dieline.archetype ?? 'tuck-end',
-      dieline: loaded.dieline,
-      dimensions: loaded.dieline.dimensions,
+      archetype: hydratedArchetype,
+      dieline: hydratedDieline,
+      dimensions: hydratedDieline.dimensions,
       elements: outsideElements,
       committedElements: outsideElements,
       selectedElementId: null,
