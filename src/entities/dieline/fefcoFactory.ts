@@ -6,6 +6,7 @@ import {
   mapFlapPointsToMm,
   reverseMappedFlapContour,
   type ColumnFlapGeometry,
+  type FlapPointSpec,
 } from './fefcoFlaps';
 import { computeSvgPathBoundsMm, pt, roundMm, validateDimensions } from './geometry';
 import type {
@@ -669,6 +670,102 @@ export function generateFefcoBox(config: FefcoConfig, dimensions: Dieline['dimen
     }
 
     const faceId = `${side}-flap-${col.id}`;
+    const bellowsA = geom.extraFolds.find((f) => f.idSuffix === 'bellows-a');
+    const bellowsB = geom.extraFolds.find((f) => f.idSuffix === 'bellows-b');
+
+    if (bellowsA && bellowsB) {
+      const halfH = bellowsA.b.h;
+      const centerPts: FlapPointSpec[] = [
+        { u: 0, h: 0 },
+        { u: 0.5, h: halfH },
+        { u: 1, h: 0 },
+      ];
+      const leftWebPts: FlapPointSpec[] = [
+        { u: 0, h: 0 },
+        { u: 0, h: halfH },
+        { u: 0.5, h: halfH },
+      ];
+      const rightWebPts: FlapPointSpec[] = [
+        { u: 0.5, h: halfH },
+        { u: 1, h: halfH },
+        { u: 1, h: 0 },
+      ];
+
+      const centerFaceMm = mapFlapPointsToMm(centerPts, col.x0, col.width, hingeY, dir);
+      const leftFaceMm = mapFlapPointsToMm(leftWebPts, col.x0, col.width, hingeY, dir);
+      const rightFaceMm = mapFlapPointsToMm(rightWebPts, col.x0, col.width, hingeY, dir);
+
+      const centerFaceId = faceId;
+      const leftFaceId = `${faceId}-bellows-a`;
+      const rightFaceId = `${faceId}-bellows-b`;
+
+      const foldBellowsAId = `fold-${side}-${col.id}-bellows-a`;
+      const foldBellowsBId = `fold-${side}-${col.id}-bellows-b`;
+
+      faces.push(
+        {
+          id: centerFaceId,
+          name: `${side === 'top' ? 'Top' : 'Bottom'} ${col.name} Flap Center`,
+          path: buildClosedSvgPolygon(centerFaceMm),
+          folds: [hingeFoldId, foldBellowsAId, foldBellowsBId],
+          adjacentFaces: [col.id],
+        },
+        {
+          id: leftFaceId,
+          name: `${side === 'top' ? 'Top' : 'Bottom'} ${col.name} Bellows Left`,
+          path: buildClosedSvgPolygon(leftFaceMm),
+          folds: [foldBellowsAId],
+          adjacentFaces: [centerFaceId],
+        },
+        {
+          id: rightFaceId,
+          name: `${side === 'top' ? 'Top' : 'Bottom'} ${col.name} Bellows Right`,
+          path: buildClosedSvgPolygon(rightFaceMm),
+          folds: [foldBellowsBId],
+          adjacentFaces: [centerFaceId],
+        },
+      );
+      wallAdjacent.push(centerFaceId);
+
+      const bellowsStage: [number, number] = side === 'bottom' ? [30, 60] : [60, 90];
+
+      // Main flap group contains center face + both corner bellows webs
+      flapGroupEntries.push({
+        id: `group-${side}-flap-${col.id}`,
+        name: `${side === 'top' ? 'Top' : 'Bottom'} ${col.name} Flap`,
+        faceIds: [centerFaceId, leftFaceId, rightFaceId],
+        pivotFoldId: hingeFoldId,
+        animatedAngleRange: [0, 90],
+        foldStage: bellowsStage,
+        layerOrder: 1,
+        layerOffsetDirection: side === 'top' ? -1 : 1,
+      });
+
+      // Child angled fold group for left bellows web: pleats inward at 45 deg
+      flapGroupEntries.push({
+        id: `group-${side}-flap-${col.id}-bellows-a`,
+        name: `${side === 'top' ? 'Top' : 'Bottom'} ${col.name} Bellows Left`,
+        faceIds: [leftFaceId],
+        pivotFoldId: foldBellowsAId,
+        animatedAngleRange: [0, -45],
+        foldStage: bellowsStage,
+        layerOrder: 0,
+      });
+
+      // Child angled fold group for right bellows web: pleats inward at 45 deg
+      flapGroupEntries.push({
+        id: `group-${side}-flap-${col.id}-bellows-b`,
+        name: `${side === 'top' ? 'Top' : 'Bottom'} ${col.name} Bellows Right`,
+        faceIds: [rightFaceId],
+        pivotFoldId: foldBellowsBId,
+        animatedAngleRange: [0, 45],
+        foldStage: bellowsStage,
+        layerOrder: 0,
+      });
+
+      return [centerFaceId, leftFaceId, rightFaceId];
+    }
+
     const polyPts = geom.facePolygons[0]?.points ?? geom.cutContour;
     const facePtsMm = mapFlapPointsToMm(polyPts, col.x0, col.width, hingeY, dir);
     const holePaths: string[] = [];
@@ -689,11 +786,58 @@ export function generateFefcoBox(config: FefcoConfig, dimensions: Dieline['dimen
     }
 
     const isUpright = geom.animatedAngleRange?.[0] === 0 && geom.animatedAngleRange?.[1] === 0;
+    const isTuckTopPreset =
+      side === 'top' &&
+      (topPreset === 'euroslot-240-top' ||
+        topPreset === 'euroslot-241-top' ||
+        topPreset === 'euroslot-242-top' ||
+        topPreset === 'tuck-lid-215-c0' ||
+        topPreset === 'rett-c0' ||
+        topPreset === 'rett-c2' ||
+        config.topFlapType === 'tuck');
+    const isTuckLid =
+      isTuckTopPreset &&
+      col.basis === 'L' &&
+      !isUpright &&
+      geom.extraFolds.some(
+        (f) =>
+          f.idSuffix === 'tuck-tongue' ||
+          f.idSuffix === 'latch-lock' ||
+          f.idSuffix === 'latch-tab' ||
+          f.isArticulatedTuck,
+      );
+    const isDustFlap =
+      isTuckTopPreset && (col.basis === 'W' || (geom.layerOrder ?? 1) === 0) && !isUpright;
+
     let resolvedLayerOrder: number;
     let resolvedTier: number | undefined;
     let foldStage: [number, number];
 
-    if (geom.foldStage) {
+    let resolvedTongueStage: [number, number] | undefined = geom.tongueFoldStage;
+    let resolvedTongueRange: [number, number] | undefined = geom.tongueAnimatedAngleRange;
+    let resolvedTongueLayerOrder: number | undefined = geom.tongueLayerOrder;
+    let resolvedTongueOffsetMm: number | undefined = geom.tongueLayerOffsetMm;
+
+    if (isTuckLid) {
+      // Main lid folds over dust flaps [75, 85], tongue folds inside [85, 90]
+      foldStage = [75, 85];
+      resolvedLayerOrder = 1;
+      resolvedTier = 2.0;
+      resolvedTongueStage = [85, 90];
+      resolvedTongueRange = [0, 90];
+      resolvedTongueLayerOrder = -1;
+      resolvedTongueOffsetMm = -roundMm(thickness * 1.5 + 0.5);
+    } else if (isDustFlap) {
+      // Left/right dust flaps fold inward [60, 75]
+      foldStage = [60, 75];
+      resolvedLayerOrder = 0;
+      resolvedTier = col.id === 'left' ? 0.4 : 0.8;
+      // Preserve side-wing upward articulation if defined on geom (e.g. 0241)
+      if (geom.tongueFoldStage) {
+        resolvedTongueStage = geom.tongueFoldStage;
+        resolvedTongueRange = geom.tongueAnimatedAngleRange;
+      }
+    } else if (geom.foldStage) {
       foldStage = geom.foldStage;
       resolvedLayerOrder = geom.layerOrder ?? 1;
       resolvedTier = geom.layerOffsetTier;
@@ -719,7 +863,7 @@ export function generateFefcoBox(config: FefcoConfig, dimensions: Dieline['dimen
     } else if (isUpright) {
       foldStage = hasBottomAnchor ? [60, 90] : [45, 90];
       resolvedLayerOrder = geom.layerOrder ?? 1;
-      resolvedTier = geom.layerOffsetTier;
+      resolvedTier = geom.layerOffsetTier ?? 1.5;
     } else if (PLANAR_SLOTTED_PRESETS.has(topPreset)) {
       if (col.basis === 'W') {
         resolvedLayerOrder = 0;
@@ -769,14 +913,14 @@ export function generateFefcoBox(config: FefcoConfig, dimensions: Dieline['dimen
       layerOrder: resolvedLayerOrder,
       layerOffsetDirection: wrapPivotFoldId ? -1 : side === 'top' ? -1 : 1,
       ...(resolvedTier !== undefined ? { layerOffsetTier: resolvedTier } : {}),
-      ...(geom.tongueLayerOrder !== undefined ? { tongueLayerOrder: geom.tongueLayerOrder } : {}),
-      ...(geom.tongueLayerOffsetMm !== undefined
-        ? { tongueLayerOffsetMm: geom.tongueLayerOffsetMm }
+      ...(resolvedTongueLayerOrder !== undefined
+        ? { tongueLayerOrder: resolvedTongueLayerOrder }
         : {}),
-      ...(geom.tongueFoldStage ? { tongueFoldStage: geom.tongueFoldStage } : {}),
-      ...(geom.tongueAnimatedAngleRange
-        ? { tongueAnimatedAngleRange: geom.tongueAnimatedAngleRange }
+      ...(resolvedTongueOffsetMm !== undefined
+        ? { tongueLayerOffsetMm: resolvedTongueOffsetMm }
         : {}),
+      ...(resolvedTongueStage ? { tongueFoldStage: resolvedTongueStage } : {}),
+      ...(resolvedTongueRange ? { tongueAnimatedAngleRange: resolvedTongueRange } : {}),
     });
 
     return wrapPivotFoldId ? [] : [faceId];

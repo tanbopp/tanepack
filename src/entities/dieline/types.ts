@@ -184,6 +184,10 @@ export interface FoldGroup {
   tongueFoldStage?: [number, number] | undefined;
   /** Optional angle range override [startDeg, endDeg] (e.g. [0, -90] for upward Euroslot wings) on secondary crease. */
   tongueAnimatedAngleRange?: [number, number] | undefined;
+  /** Optional rotation axis override in local 3D space ('x' | 'y' | 'z' | 'custom' or [nx, ny, nz]). */
+  rotationAxis?: [number, number, number] | 'x' | 'y' | 'z' | 'custom' | undefined;
+  /** Optional rotation sign override (+1 or -1). */
+  rotationSign?: 1 | -1 | undefined;
 }
 
 export interface Dieline {

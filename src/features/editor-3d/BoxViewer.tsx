@@ -163,16 +163,26 @@ function KinematicGroupMesh({
   const { targetDeg, progress } = computeNodeTargetAngleDeg(node, foldAngle);
   const angleRad = THREE.MathUtils.degToRad(targetDeg) * node.rotationSign;
 
-  const rotation: [number, number, number] = [
-    node.rotationAxis === 'x' ? angleRad : 0,
-    0,
-    node.rotationAxis === 'z' ? angleRad : 0,
-  ];
+  const quaternion = useMemo(() => {
+    if (!node.rotationAxisVector) {
+      if (node.rotationAxis === 'x') {
+        return new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), angleRad);
+      }
+      if (node.rotationAxis === 'z') {
+        return new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), angleRad);
+      }
+      return new THREE.Quaternion();
+    }
+    const [ax, ay, az] = node.rotationAxisVector;
+    const axisVec = new THREE.Vector3(ax, ay, az).normalize();
+    return new THREE.Quaternion().setFromAxisAngle(axisVec, angleRad);
+  }, [node.rotationAxis, node.rotationAxisVector, angleRad]);
+
   // Step layered flaps along local -Y (box outward normal when folded) as hinge closes
   const layerOffsetY = -node.layerOffsetWorld * progress;
 
   return (
-    <group name={node.id} position={node.position} rotation={rotation}>
+    <group name={node.id} position={node.position} quaternion={quaternion}>
       <group position={[0, layerOffsetY, 0]}>
         {node.faces.map((face) => (
           <BakedFaceMesh

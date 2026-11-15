@@ -42,7 +42,10 @@ function computeFaceWorldBounds(
 
     const { targetDeg, progress } = computeNodeTargetAngleDeg(node, foldAngleDeg);
     const rad = THREE.MathUtils.degToRad(targetDeg) * node.rotationSign;
-    if (node.rotationAxis === 'x') {
+    if (node.rotationAxisVector) {
+      const axis = new THREE.Vector3(...node.rotationAxisVector).normalize();
+      group.quaternion.setFromAxisAngle(axis, rad);
+    } else if (node.rotationAxis === 'x') {
       group.rotation.x = rad;
     } else if (node.rotationAxis === 'z') {
       group.rotation.z = rad;
@@ -75,6 +78,15 @@ function computeFaceWorldBounds(
   });
 
   return result;
+}
+
+function findNode(node: KinematicBoxNode, id: string): KinematicBoxNode | null {
+  if (node.id === id) return node;
+  for (const child of node.children) {
+    const found = findNode(child, id);
+    if (found) return found;
+  }
+  return null;
 }
 
 describe('buildBoxGeometry', () => {
@@ -599,15 +611,6 @@ describe('buildBoxGeometry', () => {
     expect(cubicPts.length).toBeGreaterThan(8);
     expect(Math.max(...cubicPts.map((p) => p.x))).toBeGreaterThan(10.5 * DIELINE_SCALE_TO_3D);
 
-    const findNode = (node: KinematicBoxNode, id: string): KinematicBoxNode | null => {
-      if (node.id === id) return node;
-      for (const child of node.children) {
-        const found = findNode(child, id);
-        if (found) return found;
-      }
-      return null;
-    };
-
     const dims = { length: 180, width: 100, height: 140, thickness: 0.5, bleedSize: 3 };
 
     // 0210 & 0215: lid closes [72, 84], tongues stay flat until 84 then tuck 90 deg during [84, 90]
@@ -638,8 +641,8 @@ describe('buildBoxGeometry', () => {
     expect(findNode(m0242.root, 'group-top-flap-back-tongue')).toBeNull();
     const frontLid0242 = findNode(m0242.root, 'group-top-flap-front')!;
     const frontLatch0242 = findNode(m0242.root, 'group-top-flap-front-tongue')!;
-    expect(computeNodeTargetAngleDeg(frontLid0242, 84).targetDeg).toBe(90);
-    expect(computeNodeTargetAngleDeg(frontLatch0242, 84).targetDeg).toBe(0);
+    expect(computeNodeTargetAngleDeg(frontLid0242, 85).targetDeg).toBe(90);
+    expect(computeNodeTargetAngleDeg(frontLatch0242, 85).targetDeg).toBe(0);
     expect(computeNodeTargetAngleDeg(frontLatch0242, 90).targetDeg).toBe(90);
     const closed0242 = computeFaceWorldBounds(m0242.root, 90);
     expect(closed0242.get('top-flap-back')!.max.y).toBeGreaterThan(
@@ -738,5 +741,61 @@ describe('buildBoxGeometry', () => {
     // Twin circular finger holes
     expect(frontPart219.edgeGeometry.attributes.position?.count).toBeGreaterThan(20);
     m0219Holes.dispose();
+  });
+
+  it('enforces Step 22 dynamic angled fold kinematics for FEFCO 0226 and exact tuck top sequence for 0240/0242', () => {
+    const dims = {
+      length: 200,
+      width: 140,
+      height: 100,
+      thickness: 1.5,
+      bleedSize: 3,
+    };
+
+    // 0226 (Bellows Box): diagonal miter creases collapse inward at +-45 degrees
+    const d0226 = generateDieline('fefco-0226', dims);
+    const m0226 = buildBoxGeometry(d0226);
+
+    const bellowsLeftNode = findNode(m0226.root, 'group-top-flap-left-bellows-a')!;
+    const bellowsRightNode = findNode(m0226.root, 'group-top-flap-left-bellows-b')!;
+    expect(bellowsLeftNode).toBeDefined();
+    expect(bellowsRightNode).toBeDefined();
+    expect(bellowsLeftNode.rotationAxis).toBe('custom');
+    expect(bellowsLeftNode.rotationAxisVector).toBeDefined();
+    // Verify non-zero X and Z components in diagonal rotation axis
+    expect(Math.abs(bellowsLeftNode.rotationAxisVector![0])).toBeGreaterThan(0.1);
+    expect(Math.abs(bellowsLeftNode.rotationAxisVector![2])).toBeGreaterThan(0.1);
+    expect(computeNodeTargetAngleDeg(bellowsLeftNode, 90).targetDeg).toBe(-45);
+    expect(computeNodeTargetAngleDeg(bellowsRightNode, 90).targetDeg).toBe(45);
+    m0226.dispose();
+
+    // 0240: Dust flaps [60, 75] -> Main lid [75, 85] -> Tongue inside [85, 90]
+    const d0240 = generateDieline('fefco-0240', dims);
+    const m0240 = buildBoxGeometry(d0240);
+    const dustLeft240 = findNode(m0240.root, 'group-top-flap-left')!;
+    const dustRight240 = findNode(m0240.root, 'group-top-flap-right')!;
+    const lid240 = findNode(m0240.root, 'group-top-flap-front')!;
+    const tongue240 = findNode(m0240.root, 'group-top-flap-front-tongue')!;
+
+    // At foldAngle = 60: walls done, dust flaps start folding
+    expect(computeNodeTargetAngleDeg(dustLeft240, 60).targetDeg).toBe(0);
+    expect(computeNodeTargetAngleDeg(lid240, 60).targetDeg).toBe(0);
+    expect(computeNodeTargetAngleDeg(tongue240, 60).targetDeg).toBe(0);
+
+    // At foldAngle = 75: dust flaps fully folded flat inward (90 deg), lid just starts
+    expect(computeNodeTargetAngleDeg(dustLeft240, 75).targetDeg).toBe(90);
+    expect(computeNodeTargetAngleDeg(dustRight240, 75).targetDeg).toBe(90);
+    expect(computeNodeTargetAngleDeg(lid240, 75).targetDeg).toBe(0);
+    expect(computeNodeTargetAngleDeg(tongue240, 75).targetDeg).toBe(0);
+
+    // At foldAngle = 85: main lid fully folded over (90 deg), tongue just starts sliding inside
+    expect(computeNodeTargetAngleDeg(lid240, 85).targetDeg).toBe(90);
+    expect(computeNodeTargetAngleDeg(tongue240, 85).targetDeg).toBe(0);
+
+    // At foldAngle = 90: tongue fully tucked inside (90 deg)
+    expect(computeNodeTargetAngleDeg(tongue240, 90).targetDeg).toBe(90);
+    expect(tongue240.layerOrder).toBe(-1);
+    expect(tongue240.layerOffsetWorld).toBeLessThan(0);
+    m0240.dispose();
   });
 });

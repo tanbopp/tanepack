@@ -4,7 +4,7 @@ import type { Dieline, Face, Fold, FoldGroup, Point } from '@entities/dieline/ty
 
 export const DIELINE_SCALE_TO_3D = 0.01;
 
-export type FoldRotationAxis = 'x' | 'z';
+export type FoldRotationAxis = 'x' | 'y' | 'z' | 'custom';
 
 export interface FaceBoundsMm {
   minX: number;
@@ -32,6 +32,7 @@ export interface KinematicBoxNode {
   position: [number, number, number];
   pivotMm: Point;
   rotationAxis: FoldRotationAxis | null;
+  rotationAxisVector: [number, number, number] | null;
   rotationSign: 1 | -1;
   animatedAngleRange: [number, number];
   foldStage: [number, number];
@@ -485,29 +486,90 @@ function midpoint(a: Point, b: Point): Point {
   };
 }
 
-function computeRotationRule(
+export interface RotationRuleResult {
+  axis: FoldRotationAxis;
+  axisVector: [number, number, number];
+  sign: 1 | -1;
+}
+
+export function computeRotationRule(
   fold: Fold,
   pivotMm: Point,
   faceCenterMm: Point,
-): { axis: FoldRotationAxis; sign: 1 | -1 } {
-  const edgeDx = Math.abs(fold.to.x - fold.from.x);
-  const edgeDy = Math.abs(fold.to.y - fold.from.y);
+  explicitAxis?: [number, number, number] | FoldRotationAxis | undefined,
+  explicitSign?: 1 | -1 | undefined,
+): RotationRuleResult {
+  const dx = fold.to.x - fold.from.x;
+  const dy = fold.to.y - fold.from.y;
+  const edgeLen = Math.hypot(dx, dy);
 
-  // Vertical fold lines run along Z in 3D space (pivot rotates around Z axis)
-  if (edgeDy > edgeDx) {
-    const relX = faceCenterMm.x - pivotMm.x;
-    return {
-      axis: 'z',
-      sign: relX >= 0 ? 1 : -1,
-    };
+  // In 3D dieline space, SVG +X maps to 3D +X, and SVG +Y maps to 3D +Z
+  const ux = edgeLen > 1e-6 ? dx / edgeLen : 1;
+  const uz = edgeLen > 1e-6 ? dy / edgeLen : 0;
+
+  // In-plane vector from pivot point to child face center in 3D
+  const rx = (faceCenterMm.x - pivotMm.x) * DIELINE_SCALE_TO_3D;
+  const rz = (faceCenterMm.y - pivotMm.y) * DIELINE_SCALE_TO_3D;
+
+  // Dynamic cross product (u x r)_y = u_z * r_x - u_x * r_z
+  // Positive crossY means rotating around +u by positive angle lifts the face into +Y (interior)
+  const crossY = uz * rx - ux * rz;
+  const dynamicSign: 1 | -1 = crossY >= 0 ? 1 : -1;
+
+  let axis: FoldRotationAxis;
+  let axisVector: [number, number, number];
+
+  if (explicitAxis) {
+    if (Array.isArray(explicitAxis)) {
+      axis = 'custom';
+      const mag = Math.hypot(explicitAxis[0], explicitAxis[1], explicitAxis[2]) || 1;
+      axisVector = [explicitAxis[0] / mag, explicitAxis[1] / mag, explicitAxis[2] / mag];
+    } else if (explicitAxis === 'x') {
+      axis = 'x';
+      axisVector = [1, 0, 0];
+    } else if (explicitAxis === 'z') {
+      axis = 'z';
+      axisVector = [0, 0, 1];
+    } else if (explicitAxis === 'y') {
+      axis = 'y';
+      axisVector = [0, 1, 0];
+    } else {
+      axis = 'custom';
+      axisVector = [ux, 0, uz];
+    }
+  } else {
+    const absDx = Math.abs(dx);
+    const absDy = Math.abs(dy);
+    if (absDy < 1e-4 * Math.max(1, absDx)) {
+      // Pure horizontal fold line -> rotates on X axis
+      axis = 'x';
+      axisVector = [1, 0, 0];
+    } else if (absDx < 1e-4 * Math.max(1, absDy)) {
+      // Pure vertical fold line -> rotates on Z axis
+      axis = 'z';
+      axisVector = [0, 0, 1];
+    } else {
+      // Angled / diagonal fold line -> rotates on custom in-plane unit vector
+      axis = 'custom';
+      axisVector = [ux, 0, uz];
+    }
   }
 
-  // Horizontal fold lines run along X in 3D space (pivot rotates around X axis)
-  const relY = faceCenterMm.y - pivotMm.y;
-  return {
-    axis: 'x',
-    sign: relY < 0 ? 1 : -1,
-  };
+  // Use explicitSign if specified; otherwise calculate sign dynamically
+  let sign: 1 | -1;
+  if (explicitSign !== undefined) {
+    sign = explicitSign;
+  } else if (axis === 'x') {
+    const relY = faceCenterMm.y - pivotMm.y;
+    sign = relY < 0 ? 1 : -1;
+  } else if (axis === 'z') {
+    const relX = faceCenterMm.x - pivotMm.x;
+    sign = relX >= 0 ? 1 : -1;
+  } else {
+    sign = dynamicSign;
+  }
+
+  return { axis, axisVector, sign };
 }
 
 function isStrictSubset(candidate: Set<string>, superset: Set<string>): boolean {
@@ -699,6 +761,8 @@ export function buildBoxGeometry(dieline: Dieline): KinematicBoxModel {
       internalHorizontalFold,
       tonguePivotMm,
       tongueShapeData.boundsMm.center,
+      undefined,
+      undefined,
     );
 
     return {
@@ -713,6 +777,7 @@ export function buildBoxGeometry(dieline: Dieline): KinematicBoxModel {
         ],
         pivotMm: tonguePivotMm,
         rotationAxis: tongueRule.axis,
+        rotationAxisVector: tongueRule.axisVector,
         rotationSign: tongueRule.sign,
         animatedAngleRange: tongueAnimatedAngleRange,
         foldStage: tongueFoldStage,
@@ -801,7 +866,13 @@ export function buildBoxGeometry(dieline: Dieline): KinematicBoxModel {
       directFaces[0]?.boundsMm.center ??
       faceBoundsMap.get(group.faceIds[0] ?? '')?.center ??
       pivotMm;
-    const { axis, sign } = computeRotationRule(fold, pivotMm, referenceCenter);
+    const { axis, axisVector, sign } = computeRotationRule(
+      fold,
+      pivotMm,
+      referenceCenter,
+      group.rotationAxis,
+      group.rotationSign,
+    );
 
     return {
       id: group.id,
@@ -809,6 +880,7 @@ export function buildBoxGeometry(dieline: Dieline): KinematicBoxModel {
       position,
       pivotMm,
       rotationAxis: axis,
+      rotationAxisVector: axisVector,
       rotationSign: sign,
       animatedAngleRange: group.animatedAngleRange,
       foldStage,
@@ -854,6 +926,7 @@ export function buildBoxGeometry(dieline: Dieline): KinematicBoxModel {
     position: [0, 0, 0],
     pivotMm: rootPivotMm,
     rotationAxis: null,
+    rotationAxisVector: null,
     rotationSign: 1,
     animatedAngleRange: [0, 0],
     foldStage: [0, 90],
