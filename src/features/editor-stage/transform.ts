@@ -188,7 +188,7 @@ function computeUniformScaleFromCornerDrag(
 
 /**
  * Computes uniform corner resize updates in SVG mm:
- * - For images: maintains aspect ratio cleanly and clamps within parent face bounds.
+ * - For images and shapes: maintains aspect ratio freely across the canvas above MIN_IMAGE_SIZE_MM.
  * - For text: scales fontSize proportionally within [4mm, 72mm] alongside box width/height.
  */
 export function computeCornerResizePatch(
@@ -196,7 +196,7 @@ export function computeCornerResizePatch(
   corner: ResizeCorner,
   pointerMm: Point,
   start: ResizeStartSnapshot,
-  faceBounds: SvgPathBoundsMm,
+  _faceBounds?: SvgPathBoundsMm,
 ): ResizeElementPatch {
   const rawScale = computeUniformScaleFromCornerDrag(corner, pointerMm, start);
 
@@ -226,21 +226,15 @@ export function computeCornerResizePatch(
   const safeW = Math.max(1, start.elementWidth);
   const safeH = Math.max(1, start.elementHeight);
   const minScale = Math.max(MIN_IMAGE_SIZE_MM / safeW, MIN_IMAGE_SIZE_MM / safeH);
-  const maxScale = Math.max(
-    minScale,
-    Math.min(faceBounds.width / safeW, faceBounds.height / safeH),
-  );
-  const scale = clampBetween(rawScale, minScale, maxScale);
+  const scale = clampBetween(rawScale, minScale, 20);
 
   const nextWidth = roundMm(safeW * scale);
   const nextHeight = roundMm(safeH * scale);
-  const maxX = Math.max(faceBounds.minX, faceBounds.maxX - nextWidth);
-  const maxY = Math.max(faceBounds.minY, faceBounds.maxY - nextHeight);
 
   return {
     transform: {
-      x: roundMm(clampBetween(start.center.x - nextWidth * 0.5, faceBounds.minX, maxX)),
-      y: roundMm(clampBetween(start.center.y - nextHeight * 0.5, faceBounds.minY, maxY)),
+      x: roundMm(start.center.x - nextWidth * 0.5),
+      y: roundMm(start.center.y - nextHeight * 0.5),
       width: nextWidth,
       height: nextHeight,
     },

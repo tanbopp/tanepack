@@ -16,6 +16,7 @@ export const MAX_TEXTURE_SIZE = 1024;
 export const DEFAULT_BAKE_SCALE = 2;
 
 export type BakeableArtworkElement = DesignElement;
+export type BakeSide = 'outside' | 'inside';
 
 export interface TexturePixelDimensions {
   width: number;
@@ -58,33 +59,36 @@ export function computeBakedTextureSize(
   };
 }
 
-/** Filters and z-orders outside-surface text, image, and shape elements belonging to a single face. */
+/** Filters and z-orders surface-specific text, image, and shape elements belonging to a single face. */
 export function getFaceElementsForFace(
   faceId: string,
   elements: readonly DesignElement[],
+  side: BakeSide = 'outside',
 ): BakeableArtworkElement[] {
   return elements
     .filter(
       (element) =>
         (element.type === 'text' || element.type === 'image' || element.type === 'shape') &&
         element.faceId === faceId &&
-        element.side === 'outside',
+        element.side === side,
     )
     .sort((a, b) => a.zIndex - b.zIndex);
 }
 
 /**
- * Produces a deterministic comparison key for a face's baked inputs so unchanged faces
- * skip canvas re-baking when another face's elements change.
+ * Produces a deterministic comparison key for a face side's baked inputs so unchanged faces
+ * skip canvas re-baking when another face's or side's elements change.
  */
 export function buildFaceBakeSignature(
   face: Face,
   elements: readonly DesignElement[],
   scale = DEFAULT_BAKE_SCALE,
+  side: BakeSide = 'outside',
 ): string {
-  const faceElements = getFaceElementsForFace(face.id, elements);
+  const faceElements = getFaceElementsForFace(face.id, elements, side);
   return JSON.stringify({
     faceId: face.id,
+    side,
     path: face.path,
     scale,
     elements: faceElements,
@@ -291,6 +295,7 @@ export function bakeFaceTexture(
   elements: readonly DesignElement[],
   scale = DEFAULT_BAKE_SCALE,
   onAsyncImageReady?: () => void,
+  side: BakeSide = 'outside',
 ): THREE.CanvasTexture {
   const bounds = computeSvgPathBoundsMm(face.path);
   const { width, height, pxPerMmX, pxPerMmY } = computeBakedTextureSize(
@@ -311,7 +316,7 @@ export function bakeFaceTexture(
 
   const ctx = canvas.getContext('2d');
   if (ctx) {
-    const matchingElements = getFaceElementsForFace(face.id, elements);
+    const matchingElements = getFaceElementsForFace(face.id, elements, side);
     const pendingImages = new Set<string>();
 
     const handlePendingImage = (image: HTMLImageElement, src: string) => {

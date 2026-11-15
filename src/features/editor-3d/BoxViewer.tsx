@@ -10,6 +10,7 @@ import { type DielineArchetype, generateDieline } from '@entities/dieline';
 import type { Dieline } from '@entities/dieline/types';
 import {
   bakeFaceTexture,
+  type BakeSide,
   buildFaceBakeSignature,
   DEFAULT_BAKE_SCALE,
   getFaceElementsForFace,
@@ -43,7 +44,10 @@ export interface BoxViewerProps {
   onRegisterCapture?: ((captureFn: (() => string | null) | null) => void) | undefined;
 }
 
-interface FaceMaterialEntry {
+// 0.05 mm offset per side prevents Z-fighting while pairing single-sided exterior/interior meshes
+const FACE_SIDE_OFFSET_3D = 0.05 * DIELINE_SCALE_TO_3D;
+
+interface FaceSideMaterialEntry {
   signature: string | null;
   texture: THREE.CanvasTexture | null;
   outerMaterial: THREE.MeshStandardMaterial;
@@ -51,36 +55,64 @@ interface FaceMaterialEntry {
   overlapMaterial: THREE.MeshStandardMaterial;
 }
 
-function createStandardPaperMaterial(polygonOffsetFactor: number): THREE.MeshStandardMaterial {
+interface FaceMaterialEntry {
+  outside: FaceSideMaterialEntry;
+  inside: FaceSideMaterialEntry;
+}
+
+function createStandardPaperMaterial(
+  polygonOffsetFactor: number,
+  side: THREE.Side,
+): THREE.MeshStandardMaterial {
   return new THREE.MeshStandardMaterial({
     color: '#ffffff',
     roughness: 0.72,
     metalness: 0.02,
-    side: THREE.DoubleSide,
+    side,
     polygonOffset: polygonOffsetFactor !== 0,
     polygonOffsetFactor,
     polygonOffsetUnits: polygonOffsetFactor,
   });
 }
 
-function createFaceMaterialEntry(): FaceMaterialEntry {
+function createFaceSideMaterialEntry(side: THREE.Side): FaceSideMaterialEntry {
   return {
     signature: null,
     texture: null,
-    outerMaterial: createStandardPaperMaterial(0),
-    innerMaterial: createStandardPaperMaterial(2),
-    overlapMaterial: createStandardPaperMaterial(-2),
+    outerMaterial: createStandardPaperMaterial(0, side),
+    innerMaterial: createStandardPaperMaterial(2, side),
+    overlapMaterial: createStandardPaperMaterial(-2, side),
   };
 }
 
-function resolveLayerMaterial(entry: FaceMaterialEntry, part: KinematicFacePart) {
+function createFaceMaterialEntry(): FaceMaterialEntry {
+  return {
+    // Geometry normals face local +Y (carton interior when folded), so exterior uses BackSide
+    outside: createFaceSideMaterialEntry(THREE.BackSide),
+    inside: createFaceSideMaterialEntry(THREE.FrontSide),
+  };
+}
+
+function disposeFaceSideMaterialEntry(sideEntry: FaceSideMaterialEntry): void {
+  sideEntry.texture?.dispose();
+  sideEntry.texture = null;
+  sideEntry.signature = null;
+  sideEntry.outerMaterial.map = null;
+  sideEntry.innerMaterial.map = null;
+  sideEntry.overlapMaterial.map = null;
+  sideEntry.outerMaterial.dispose();
+  sideEntry.innerMaterial.dispose();
+  sideEntry.overlapMaterial.dispose();
+}
+
+function resolveLayerMaterial(sideEntry: FaceSideMaterialEntry, part: KinematicFacePart) {
   if (part.layerOrder >= 2) {
-    return entry.overlapMaterial;
+    return sideEntry.overlapMaterial;
   }
   if (part.layerOrder === 0 || part.isInnerLayer) {
-    return entry.innerMaterial;
+    return sideEntry.innerMaterial;
   }
-  return entry.outerMaterial;
+  return sideEntry.outerMaterial;
 }
 
 interface BakedFaceMeshProps {
@@ -97,9 +129,16 @@ const BakedFaceMesh = memo(function BakedFaceMesh({
   return (
     <group>
       <mesh
-        name={`face-${part.faceId}`}
+        name={`face-${part.faceId}-outside`}
+        position={[0, -FACE_SIDE_OFFSET_3D, 0]}
+        geometry={part.outsideGeometry}
+        material={resolveLayerMaterial(entry.outside, part)}
+      />
+      <mesh
+        name={`face-${part.faceId}-inside`}
+        position={[0, FACE_SIDE_OFFSET_3D, 0]}
         geometry={part.geometry}
-        material={resolveLayerMaterial(entry, part)}
+        material={resolveLayerMaterial(entry.inside, part)}
       />
       <lineSegments geometry={part.edgeGeometry} material={edgeMaterial} />
     </group>
@@ -209,60 +248,66 @@ function CartonAssembly({
   useEffect(() => {
     return () => {
       for (const entry of faceMaterials.values()) {
-        entry.texture?.dispose();
-        entry.texture = null;
-        entry.signature = null;
-        entry.outerMaterial.map = null;
-        entry.innerMaterial.map = null;
-        entry.overlapMaterial.map = null;
-        entry.outerMaterial.dispose();
-        entry.innerMaterial.dispose();
-        entry.overlapMaterial.dispose();
+        disposeFaceSideMaterialEntry(entry.outside);
+        disposeFaceSideMaterialEntry(entry.inside);
       }
-      fallbackEntry.outerMaterial.dispose();
-      fallbackEntry.innerMaterial.dispose();
-      fallbackEntry.overlapMaterial.dispose();
+      disposeFaceSideMaterialEntry(fallbackEntry.outside);
+      disposeFaceSideMaterialEntry(fallbackEntry.inside);
     };
   }, [faceMaterials, fallbackEntry]);
 
-  // Re-bake only faces whose committed outside artwork signature changed, then demand a frame
+  // Re-bake only face sides whose committed artwork signature changed, then demand a frame
   useEffect(() => {
     let dirty = false;
+
+    const syncSideEntry = (
+      face: (typeof dieline.faces)[number],
+      side: BakeSide,
+      sideEntry: FaceSideMaterialEntry,
+    ) => {
+      const sideElements = getFaceElementsForFace(face.id, elements, side);
+      const nextSignature =
+        sideElements.length > 0
+          ? buildFaceBakeSignature(face, sideElements, DEFAULT_BAKE_SCALE, side)
+          : null;
+
+      if (sideEntry.signature === nextSignature) {
+        return;
+      }
+
+      sideEntry.texture?.dispose();
+      let createdTexture: THREE.CanvasTexture | null = null;
+      if (nextSignature !== null) {
+        createdTexture = bakeFaceTexture(
+          face,
+          sideElements,
+          DEFAULT_BAKE_SCALE,
+          () => {
+            if (sideEntry.texture === createdTexture) {
+              invalidate();
+            }
+          },
+          side,
+        );
+      }
+      sideEntry.texture = createdTexture;
+      sideEntry.signature = nextSignature;
+      sideEntry.outerMaterial.map = createdTexture;
+      sideEntry.outerMaterial.needsUpdate = true;
+      sideEntry.innerMaterial.map = createdTexture;
+      sideEntry.innerMaterial.needsUpdate = true;
+      sideEntry.overlapMaterial.map = createdTexture;
+      sideEntry.overlapMaterial.needsUpdate = true;
+      dirty = true;
+    };
 
     for (const face of dieline.faces) {
       const entry = faceMaterials.get(face.id);
       if (!entry) {
         continue;
       }
-
-      const faceElements = getFaceElementsForFace(face.id, elements);
-      const nextSignature =
-        faceElements.length > 0
-          ? buildFaceBakeSignature(face, faceElements, DEFAULT_BAKE_SCALE)
-          : null;
-
-      if (entry.signature === nextSignature) {
-        continue;
-      }
-
-      entry.texture?.dispose();
-      let createdTexture: THREE.CanvasTexture | null = null;
-      if (nextSignature !== null) {
-        createdTexture = bakeFaceTexture(face, faceElements, DEFAULT_BAKE_SCALE, () => {
-          if (entry.texture === createdTexture) {
-            invalidate();
-          }
-        });
-      }
-      entry.texture = createdTexture;
-      entry.signature = nextSignature;
-      entry.outerMaterial.map = createdTexture;
-      entry.outerMaterial.needsUpdate = true;
-      entry.innerMaterial.map = createdTexture;
-      entry.innerMaterial.needsUpdate = true;
-      entry.overlapMaterial.map = createdTexture;
-      entry.overlapMaterial.needsUpdate = true;
-      dirty = true;
+      syncSideEntry(face, 'outside', entry.outside);
+      syncSideEntry(face, 'inside', entry.inside);
     }
 
     if (dirty) {
@@ -438,7 +483,7 @@ export function BoxViewer({
           enableZoom
           enableRotate
           enableDamping={false}
-          minDistance={0.8}
+          minDistance={0.5}
           maxDistance={40}
           maxPolarAngle={Math.PI * 0.49}
         />

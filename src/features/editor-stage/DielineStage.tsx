@@ -38,12 +38,14 @@ import {
   type SelectionFrame,
 } from './transform';
 import {
-  clampElementPositionToFace,
   clampZoom,
   computeFitViewport,
+  computeSnap,
+  getElementFootprintMm,
   MAX_STAGE_ZOOM,
   MIN_STAGE_ZOOM,
   screenDeltaPxToMm,
+  type SnapGuideLine,
   type StageViewport,
   zoomAtPoint,
 } from './viewport';
@@ -67,6 +69,52 @@ export interface DielineStageProps {
   isActive?: boolean | undefined;
 }
 
+interface FaceBoundsEntry {
+  faceId: string;
+  bounds: SvgPathBoundsMm;
+}
+
+function resolveFaceIdForElementPosition(
+  faceEntries: readonly FaceBoundsEntry[],
+  element: DesignElement,
+  xMm: number,
+  yMm: number,
+  fallbackFaceId: string,
+): string {
+  if (faceEntries.length === 0) {
+    return fallbackFaceId;
+  }
+
+  const fp = getElementFootprintMm(element, xMm, yMm);
+  const cx = fp.centerX;
+  const cy = fp.centerY;
+
+  let containingFaceId: string | null = null;
+  let bestContainDistSq = Number.POSITIVE_INFINITY;
+  let nearestFaceId = fallbackFaceId;
+  let bestNearestDistSq = Number.POSITIVE_INFINITY;
+
+  for (const { faceId, bounds } of faceEntries) {
+    const centerDistSq = (cx - bounds.center.x) ** 2 + (cy - bounds.center.y) ** 2;
+    if (cx >= bounds.minX && cx <= bounds.maxX && cy >= bounds.minY && cy <= bounds.maxY) {
+      if (centerDistSq < bestContainDistSq) {
+        bestContainDistSq = centerDistSq;
+        containingFaceId = faceId;
+      }
+    }
+
+    const clampedX = Math.min(bounds.maxX, Math.max(bounds.minX, cx));
+    const clampedY = Math.min(bounds.maxY, Math.max(bounds.minY, cy));
+    const edgeDistSq = (cx - clampedX) ** 2 + (cy - clampedY) ** 2;
+    if (edgeDistSq < bestNearestDistSq) {
+      bestNearestDistSq = edgeDistSq;
+      nearestFaceId = faceId;
+    }
+  }
+
+  return containingFaceId ?? nearestFaceId;
+}
+
 type ActiveTransformInteraction =
   | {
       kind: 'move';
@@ -77,7 +125,9 @@ type ActiveTransformInteraction =
       startXMm: number;
       startYMm: number;
       zoomAtStart: number;
-      faceBounds: SvgPathBoundsMm;
+      faceEntries: readonly FaceBoundsEntry[];
+      allFaceBounds: readonly SvgPathBoundsMm[];
+      siblingElements: readonly DesignElement[];
       hasMoved: boolean;
     }
   | {
@@ -93,7 +143,6 @@ type ActiveTransformInteraction =
       corner: ResizeCorner;
       pointerId: number | undefined;
       snapshot: ResizeStartSnapshot;
-      faceBounds: SvgPathBoundsMm;
       hasMoved: boolean;
     };
 
@@ -242,6 +291,7 @@ export function DielineStage({
   const viewportRef = useRef<StageViewport>({ zoom: 1, pan: { x: 0, y: 0 } });
 
   const storeDieline = useEditorStore((state) => state.dieline);
+  const activeSide = useEditorStore((state) => state.activeSide);
   const elements = useEditorStore((state) => state.elements);
   const selectedElementId = useEditorStore((state) => state.selectedElementId);
   const selectElement = useEditorStore((state) => state.selectElement);
@@ -255,6 +305,7 @@ export function DielineStage({
   const [isSpacePressed, setIsSpacePressed] = useState(false);
   const [isPanning, setIsPanning] = useState(false);
   const [draggingElementId, setDraggingElementId] = useState<string | null>(null);
+  const [snapGuides, setSnapGuides] = useState<SnapGuideLine[]>([]);
 
   useEffect(() => {
     viewportRef.current = viewport;
@@ -265,26 +316,16 @@ export function DielineStage({
     [archetype, dimensions, storeDieline],
   );
 
-  const faceBoundsMap = useMemo(() => {
-    const map = new Map<string, SvgPathBoundsMm>();
-    for (const face of dieline.faces) {
-      map.set(face.id, computeSvgPathBoundsMm(face.path));
-    }
-    return map;
-  }, [dieline.faces]);
-
-  const fallbackFaceBounds = useMemo<SvgPathBoundsMm>(
-    () => ({
-      minX: 0,
-      minY: 0,
-      maxX: dieline.totalWidth,
-      maxY: dieline.totalHeight,
-      width: dieline.totalWidth,
-      height: dieline.totalHeight,
-      center: { x: dieline.totalWidth * 0.5, y: dieline.totalHeight * 0.5 },
-    }),
-    [dieline.totalHeight, dieline.totalWidth],
+  const faceEntries = useMemo<FaceBoundsEntry[]>(
+    () =>
+      dieline.faces.map((face) => ({
+        faceId: face.id,
+        bounds: computeSvgPathBoundsMm(face.path),
+      })),
+    [dieline.faces],
   );
+
+  const allFaceBounds = useMemo(() => faceEntries.map((entry) => entry.bounds), [faceEntries]);
 
   const visibleArtworkElements = useMemo(
     () =>
@@ -292,10 +333,10 @@ export function DielineStage({
         .filter(
           (el) =>
             (el.type === 'text' || el.type === 'image' || el.type === 'shape') &&
-            el.side === 'outside',
+            el.side === activeSide,
         )
         .sort((a, b) => a.zIndex - b.zIndex),
-    [elements],
+    [activeSide, elements],
   );
 
   // Precompute <path> strings for folds once per generated dieline
@@ -561,20 +602,31 @@ export function DielineStage({
       return;
     }
 
-    const computeMovePatch = (
+    const computeMoveResult = (
       interaction: Extract<ActiveTransformInteraction, { kind: 'move' }>,
       clientX: number,
       clientY: number,
     ) => {
       const dxMm = screenDeltaPxToMm(clientX - interaction.startClientX, interaction.zoomAtStart);
       const dyMm = screenDeltaPxToMm(clientY - interaction.startClientY, interaction.zoomAtStart);
-      const nextPos = clampElementPositionToFace(
+      const snapped = computeSnap({
+        element: interaction.element,
+        candidateXMm: interaction.startXMm + dxMm,
+        candidateYMm: interaction.startYMm + dyMm,
+        faceBounds: interaction.allFaceBounds,
+        otherElements: interaction.siblingElements,
+      });
+      const nextFaceId = resolveFaceIdForElementPosition(
+        interaction.faceEntries,
         interaction.element,
-        interaction.startXMm + dxMm,
-        interaction.startYMm + dyMm,
-        interaction.faceBounds,
+        snapped.x,
+        snapped.y,
+        interaction.element.faceId,
       );
-      return { transform: { x: nextPos.x, y: nextPos.y } };
+      return {
+        patch: { faceId: nextFaceId, transform: { x: snapped.x, y: snapped.y } },
+        guides: snapped.guides,
+      };
     };
 
     const getSvgPointerMm = (clientX: number, clientY: number): Point => {
@@ -582,29 +634,34 @@ export function DielineStage({
       return clientPointToSvgMm(clientX, clientY, stageRect, viewportRef.current);
     };
 
-    const computeInteractionPatch = (
+    const computeInteractionResult = (
       interaction: ActiveTransformInteraction,
       clientX: number,
       clientY: number,
-    ) => {
+    ): { patch: Parameters<typeof updateElement>[1]; guides: SnapGuideLine[] } => {
       if (interaction.kind === 'move') {
-        return computeMovePatch(interaction, clientX, clientY);
+        return computeMoveResult(interaction, clientX, clientY);
       }
       const pointerMm = getSvgPointerMm(clientX, clientY);
       if (interaction.kind === 'rotate') {
         return {
-          transform: {
-            rotation: computeRotationDegreesFromPointer(interaction.center, pointerMm),
+          patch: {
+            transform: {
+              rotation: computeRotationDegreesFromPointer(interaction.center, pointerMm),
+            },
           },
+          guides: [],
         };
       }
-      return computeCornerResizePatch(
-        interaction.element,
-        interaction.corner,
-        pointerMm,
-        interaction.snapshot,
-        interaction.faceBounds,
-      );
+      return {
+        patch: computeCornerResizePatch(
+          interaction.element,
+          interaction.corner,
+          pointerMm,
+          interaction.snapshot,
+        ),
+        guides: [],
+      };
     };
 
     const getTargetElementId = (interaction: ActiveTransformInteraction): string =>
@@ -632,11 +689,9 @@ export function DielineStage({
         return;
       }
       interaction.hasMoved = true;
-      updateElement(
-        getTargetElementId(interaction),
-        computeInteractionPatch(interaction, event.clientX, event.clientY),
-        false,
-      );
+      const { patch, guides } = computeInteractionResult(interaction, event.clientX, event.clientY);
+      setSnapGuides(guides);
+      updateElement(getTargetElementId(interaction), patch, false);
     };
 
     const handlePointerFinish = (event: PointerEvent) => {
@@ -646,13 +701,11 @@ export function DielineStage({
       }
       activeInteractionRef.current = null;
       setDraggingElementId(null);
+      setSnapGuides([]);
 
       if (interaction.hasMoved) {
-        updateElement(
-          getTargetElementId(interaction),
-          computeInteractionPatch(interaction, event.clientX, event.clientY),
-          true,
-        );
+        const { patch } = computeInteractionResult(interaction, event.clientX, event.clientY);
+        updateElement(getTargetElementId(interaction), patch, true);
       }
     };
 
@@ -663,6 +716,7 @@ export function DielineStage({
       }
       activeInteractionRef.current = null;
       setDraggingElementId(null);
+      setSnapGuides([]);
       if (interaction.hasMoved) {
         commitElements();
       }
@@ -693,7 +747,7 @@ export function DielineStage({
     event.preventDefault();
     selectElement(element.id);
 
-    const faceBounds = faceBoundsMap.get(element.faceId) ?? fallbackFaceBounds;
+    const siblingElements = visibleArtworkElements.filter((el) => el.id !== element.id);
     activeInteractionRef.current = {
       kind: 'move',
       element,
@@ -703,9 +757,12 @@ export function DielineStage({
       startXMm: element.transform.x,
       startYMm: element.transform.y,
       zoomAtStart: viewport.zoom,
-      faceBounds,
+      faceEntries,
+      allFaceBounds,
+      siblingElements,
       hasMoved: false,
     };
+    setSnapGuides([]);
     setDraggingElementId(element.id);
   };
 
@@ -745,14 +802,12 @@ export function DielineStage({
     event.preventDefault();
     selectElement(element.id);
 
-    const faceBounds = faceBoundsMap.get(element.faceId) ?? fallbackFaceBounds;
     activeInteractionRef.current = {
       kind: 'resize',
       element,
       corner,
       pointerId: event.pointerId,
       snapshot: createResizeSnapshot(element),
-      faceBounds,
       hasMoved: false,
     };
     setDraggingElementId(element.id);
@@ -1017,6 +1072,26 @@ export function DielineStage({
               />
             ))}
           </g>
+
+          {/* Magnetic snap alignment guide lines rendered while dragging */}
+          {snapGuides.length > 0 && (
+            <g data-layer="snap-guides" style={{ pointerEvents: 'none' }}>
+              {snapGuides.map((guide, index) => (
+                <line
+                  key={`${guide.axis}-${index}`}
+                  data-testid="snap-guide-line"
+                  data-axis={guide.axis}
+                  x1={guide.x1}
+                  y1={guide.y1}
+                  x2={guide.x2}
+                  y2={guide.y2}
+                  stroke="#ff00ff"
+                  strokeWidth={0.4}
+                  strokeDasharray="1.5, 1"
+                />
+              ))}
+            </g>
+          )}
         </svg>
       </div>
 

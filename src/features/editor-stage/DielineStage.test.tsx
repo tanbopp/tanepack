@@ -4,14 +4,15 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { computeSvgPathBoundsMm } from '@entities/dieline';
 import { PX_PER_MM } from '@shared/lib/units';
 import {
-  clampElementPositionToFace,
   clampZoom,
   computeFitViewport,
+  computeSnap,
   DielineStage,
   getElementSelectionFrame,
   MAX_STAGE_ZOOM,
   MIN_STAGE_ZOOM,
   screenDeltaPxToMm,
+  SNAP_THRESHOLD_MM,
   useEditorStore,
   zoomAtPoint,
 } from './index';
@@ -139,38 +140,109 @@ describe('DielineStage component', () => {
     expect(screen.getByRole('button', { name: /Fit to Screen/i })).toBeTruthy();
   });
 
-  it('converts pointer drag delta using PX_PER_MM and zoom, clamping strictly inside parent face bounds', () => {
+  it('converts pointer drag delta using PX_PER_MM and zoom, snapping within 2mm to face edges/centers and siblings', () => {
     expect(screenDeltaPxToMm(PX_PER_MM * 10, 1)).toBeCloseTo(10, 5);
     expect(screenDeltaPxToMm(PX_PER_MM * 10, 2)).toBeCloseTo(5, 5);
 
-    const addedText = useEditorStore.getState().addElement();
-    const frontFace = useEditorStore.getState().dieline.faces.find((f) => f.id === 'front')!;
-    const frontBounds = computeSvgPathBoundsMm(frontFace.path);
-
-    const clamped = clampElementPositionToFace(
-      addedText,
-      frontBounds.maxX + 200,
-      frontBounds.minY - 200,
-      frontBounds,
+    const addedText = useEditorStore.getState().addElement({ x: 110, y: 120 });
+    const siblingText = useEditorStore
+      .getState()
+      .addElement({ x: 242, y: 215, content: 'Sibling' });
+    const faces = useEditorStore
+      .getState()
+      .dieline.faces.map((f) => computeSvgPathBoundsMm(f.path));
+    const rightBounds = computeSvgPathBoundsMm(
+      useEditorStore.getState().dieline.faces.find((f) => f.id === 'right')!.path,
     );
-    expect(clamped.x).toBeLessThanOrEqual(frontBounds.maxX);
-    expect(clamped.x).toBeGreaterThan(frontBounds.center.x);
-    expect(clamped.y).toBeGreaterThanOrEqual(frontBounds.minY);
-    expect(clamped.y).toBeLessThan(frontBounds.center.y);
 
-    const addedImg = useEditorStore.getState().addImageElement({
-      src: 'data:image/png;base64,iVBORw0KGgo=',
-      naturalWidth: 100,
-      naturalHeight: 100,
+    // Near right face center within SNAP_THRESHOLD_MM (2mm) -> snaps strictly to right center with X+Y guides
+    const snappedToFaceCenter = computeSnap({
+      element: addedText,
+      candidateXMm: rightBounds.center.x + 1.4,
+      candidateYMm: rightBounds.center.y - 1.2,
+      faceBounds: faces,
+      otherElements: [siblingText],
+      thresholdMm: SNAP_THRESHOLD_MM,
     });
-    const clampedImg = clampElementPositionToFace(
-      addedImg,
-      frontBounds.maxX + 50,
-      frontBounds.minY - 50,
-      frontBounds,
+    expect(snappedToFaceCenter.x).toBeCloseTo(rightBounds.center.x, 2);
+    expect(snappedToFaceCenter.y).toBeCloseTo(rightBounds.center.y, 2);
+    expect(snappedToFaceCenter.guides).toHaveLength(2);
+
+    // Near sibling center within SNAP_THRESHOLD_MM (2mm) -> snaps cleanly to sibling center
+    const snappedToSibling = computeSnap({
+      element: addedText,
+      candidateXMm: siblingText.transform.x - 1.1,
+      candidateYMm: siblingText.transform.y + 1.1,
+      faceBounds: faces,
+      otherElements: [siblingText],
+      thresholdMm: SNAP_THRESHOLD_MM,
+    });
+    expect(snappedToSibling.x).toBeCloseTo(siblingText.transform.x, 2);
+    expect(snappedToSibling.y).toBeCloseTo(siblingText.transform.y, 2);
+    expect(snappedToSibling.guides).toHaveLength(2);
+
+    // Beyond threshold -> moves freely without clamping or guide lines
+    const freeMove = computeSnap({
+      element: addedText,
+      candidateXMm: 450,
+      candidateYMm: 350,
+      faceBounds: faces,
+      otherElements: [siblingText],
+    });
+    expect(freeMove.x).toBeCloseTo(450, 2);
+    expect(freeMove.y).toBeCloseTo(350, 2);
+    expect(freeMove.guides).toHaveLength(0);
+  });
+
+  it('allows free-form cross-face dragging, renders magenta snap guides during drag, and filters visibility by activeSide', () => {
+    const outsideText = useEditorStore.getState().addElement({ content: 'Outside Text' });
+    const rightBounds = computeSvgPathBoundsMm(
+      useEditorStore.getState().dieline.faces.find((f) => f.id === 'right')!.path,
     );
-    expect(clampedImg.x).toBeCloseTo(frontBounds.maxX - 30, 2);
-    expect(clampedImg.y).toBeCloseTo(frontBounds.minY, 2);
+
+    render(<DielineStage />);
+
+    const textGroup = screen.getByTestId(`stage-text-${outsideText.id}`);
+    const deltaXMm = rightBounds.center.x + 1.1 - outsideText.transform.x;
+    const deltaYMm = rightBounds.center.y - outsideText.transform.y;
+
+    fireEvent.pointerDown(textGroup, { pointerId: 11, button: 0, clientX: 200, clientY: 200 });
+    fireEvent.pointerMove(window, {
+      pointerId: 11,
+      clientX: 200 + deltaXMm * PX_PER_MM,
+      clientY: 200 + deltaYMm * PX_PER_MM,
+    });
+
+    const guideLines = screen.getAllByTestId('snap-guide-line');
+    expect(guideLines.length).toBeGreaterThanOrEqual(1);
+    expect(guideLines[0]?.getAttribute('stroke')).toBe('#ff00ff');
+
+    fireEvent.pointerUp(window, {
+      pointerId: 11,
+      clientX: 200 + deltaXMm * PX_PER_MM,
+      clientY: 200 + deltaYMm * PX_PER_MM,
+    });
+
+    // Snap guides clear after release and element's owning faceId updates to 'right'
+    expect(screen.queryByTestId('snap-guide-line')).toBeNull();
+    const moved = useEditorStore.getState().committedElements.find((e) => e.id === outsideText.id)!;
+    expect(moved.faceId).toBe('right');
+    expect(moved.transform.x).toBeCloseTo(rightBounds.center.x, 1);
+
+    // Switching to Inside hides outside artwork in 2D and shows newly added inside artwork
+    act(() => {
+      useEditorStore.getState().setActiveSide('inside');
+      useEditorStore.getState().addElement({ content: 'Inside Secret' });
+    });
+    expect(screen.queryByText('Outside Text')).toBeNull();
+    expect(screen.getByText('Inside Secret')).toBeTruthy();
+
+    // Switching back to Outside hides 'Inside Secret'
+    act(() => {
+      useEditorStore.getState().setActiveSide('outside');
+    });
+    expect(screen.queryByText('Inside Secret')).toBeNull();
+    expect(screen.getByText('Outside Text')).toBeTruthy();
   });
 
   it('drags text and image elements with pointer events, committing only on pointerup', () => {
@@ -188,13 +260,13 @@ describe('DielineStage component', () => {
 
     render(<DielineStage />);
 
-    // Drag text element by +10mm in X and -12mm in Y (at zoom=1)
+    // Drag text element by +20mm in X and -22mm in Y (well clear of 2mm snap targets)
     const textGroup = screen.getByTestId(`stage-text-${addedText.id}`);
     fireEvent.pointerDown(textGroup, { pointerId: 1, button: 0, clientX: 200, clientY: 200 });
     fireEvent.pointerMove(window, {
       pointerId: 1,
-      clientX: 200 + 10 * PX_PER_MM,
-      clientY: 200 - 12 * PX_PER_MM,
+      clientX: 200 + 20 * PX_PER_MM,
+      clientY: 200 - 22 * PX_PER_MM,
     });
 
     // Live elements moved, committedElements untouched until pointerUp
@@ -202,20 +274,20 @@ describe('DielineStage component', () => {
     const committedDuringDrag = useEditorStore
       .getState()
       .committedElements.find((e) => e.id === addedText.id)!;
-    expect(liveText.transform.x).toBeCloseTo(initialTextX + 10, 1);
-    expect(liveText.transform.y).toBeCloseTo(initialTextY - 12, 1);
+    expect(liveText.transform.x).toBeCloseTo(initialTextX + 20, 1);
+    expect(liveText.transform.y).toBeCloseTo(initialTextY - 22, 1);
     expect(committedDuringDrag.transform.x).toBeCloseTo(initialTextX, 2);
 
     fireEvent.pointerUp(window, {
       pointerId: 1,
-      clientX: 200 + 10 * PX_PER_MM,
-      clientY: 200 - 12 * PX_PER_MM,
+      clientX: 200 + 20 * PX_PER_MM,
+      clientY: 200 - 22 * PX_PER_MM,
     });
     const committedAfterDrag = useEditorStore
       .getState()
       .committedElements.find((e) => e.id === addedText.id)!;
-    expect(committedAfterDrag.transform.x).toBeCloseTo(initialTextX + 10, 1);
-    expect(committedAfterDrag.transform.y).toBeCloseTo(initialTextY - 12, 1);
+    expect(committedAfterDrag.transform.x).toBeCloseTo(initialTextX + 20, 1);
+    expect(committedAfterDrag.transform.y).toBeCloseTo(initialTextY - 22, 1);
 
     // Drag image element by -8mm in X and +14mm in Y
     const imgGroup = screen.getByTestId(`stage-image-${addedImg.id}`);
@@ -226,8 +298,8 @@ describe('DielineStage component', () => {
     fireEvent.pointerDown(imgGroup, { pointerId: 2, button: 0, clientX: 300, clientY: 300 });
     fireEvent.pointerMove(window, {
       pointerId: 2,
-      clientX: 300 - 8 * PX_PER_MM,
-      clientY: 300 + 14 * PX_PER_MM,
+      clientX: 300 - 18 * PX_PER_MM,
+      clientY: 300 + 24 * PX_PER_MM,
     });
     expect(
       useEditorStore.getState().committedElements.find((e) => e.id === addedImg.id)!.transform.x,
@@ -235,12 +307,12 @@ describe('DielineStage component', () => {
 
     fireEvent.pointerUp(window, {
       pointerId: 2,
-      clientX: 300 - 8 * PX_PER_MM,
-      clientY: 300 + 14 * PX_PER_MM,
+      clientX: 300 - 18 * PX_PER_MM,
+      clientY: 300 + 24 * PX_PER_MM,
     });
     const movedImg = useEditorStore.getState().committedElements.find((e) => e.id === addedImg.id)!;
-    expect(movedImg.transform.x).toBeCloseTo(initialImgX - 8, 1);
-    expect(movedImg.transform.y).toBeCloseTo(initialImgY + 14, 1);
+    expect(movedImg.transform.x).toBeCloseTo(initialImgX - 18, 1);
+    expect(movedImg.transform.y).toBeCloseTo(initialImgY + 24, 1);
   });
 
   it('renders 4 corner resize handles and top rotate handle when selected, rotating via atan2 and resizing proportionally', () => {

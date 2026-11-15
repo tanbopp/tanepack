@@ -30,6 +30,7 @@ import {
 import { useNavigate } from 'react-router-dom';
 import { TopBarAccountActions } from '@widgets/app-shell';
 import {
+  type BoxSide,
   clampBoxDimensionMm,
   computeTextFontSizePatch,
   DEFAULT_TEXT_CONTENT,
@@ -149,6 +150,182 @@ const LazyBoxViewer = lazy(() =>
   import('@features/editor-3d').then((module) => ({ default: module.BoxViewer })),
 );
 
+const SELECTED_META_CHIP_SX = {
+  px: 1,
+  py: 0.25,
+  borderRadius: '9999px',
+  backgroundColor: 'var(--md-sys-color-surface-container-high)',
+  color: 'var(--md-sys-color-on-surface-variant)',
+  whiteSpace: 'nowrap',
+} as const;
+
+interface SelectedElementMetaProps {
+  title: string;
+  side: BoxSide;
+  faceName: string | null;
+  layerPosition: number;
+  layerTotal: number;
+  canMoveForward: boolean;
+  canMoveBackward: boolean;
+  onDelete: () => void;
+  onBringToFront: () => void;
+  onBringForward: () => void;
+  onSendBackward: () => void;
+  onSendToBack: () => void;
+}
+
+function SelectedElementMetaSection({
+  title,
+  side,
+  faceName,
+  layerPosition,
+  layerTotal,
+  canMoveForward,
+  canMoveBackward,
+  onDelete,
+  onBringToFront,
+  onBringForward,
+  onSendBackward,
+  onSendToBack,
+}: SelectedElementMetaProps) {
+  const layerActions = [
+    {
+      label: 'Bring to Front',
+      icon: 'flip_to_front',
+      disabled: !canMoveForward,
+      onClick: onBringToFront,
+    },
+    {
+      label: 'Bring Forward',
+      icon: 'arrow_upward',
+      disabled: !canMoveForward,
+      onClick: onBringForward,
+    },
+    {
+      label: 'Send Backward',
+      icon: 'arrow_downward',
+      disabled: !canMoveBackward,
+      onClick: onSendBackward,
+    },
+    {
+      label: 'Send to Back',
+      icon: 'flip_to_back',
+      disabled: !canMoveBackward,
+      onClick: onSendToBack,
+    },
+  ];
+
+  return (
+    <>
+      <Box
+        sx={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 1,
+        }}
+      >
+        <Box
+          sx={{ display: 'flex', alignItems: 'center', gap: 0.75, minWidth: 0, flexWrap: 'wrap' }}
+        >
+          <Typography variant="titleSmall" component="h2" color="text.primary">
+            {title}
+          </Typography>
+          <Typography
+            variant="labelSmall"
+            component="span"
+            data-testid="selected-element-side-badge"
+            sx={{
+              ...SELECTED_META_CHIP_SX,
+              backgroundColor:
+                side === 'inside'
+                  ? 'var(--md-sys-color-tertiary-container)'
+                  : 'var(--md-sys-color-secondary-container)',
+              color:
+                side === 'inside'
+                  ? 'var(--md-sys-color-on-tertiary-container)'
+                  : 'var(--md-sys-color-on-secondary-container)',
+            }}
+          >
+            {side === 'inside' ? 'Inside' : 'Outside'}
+          </Typography>
+          {faceName && (
+            <Typography
+              variant="labelSmall"
+              component="span"
+              data-testid="selected-element-face-badge"
+              sx={SELECTED_META_CHIP_SX}
+            >
+              {faceName}
+            </Typography>
+          )}
+        </Box>
+        <M3IconButton
+          icon="delete"
+          label="Delete selected element"
+          tooltip="Remove element"
+          size="small"
+          onClick={onDelete}
+          sx={{ color: 'var(--md-sys-color-error)', flexShrink: 0 }}
+        />
+      </Box>
+
+      {/* Layer Stack Ordering Controls */}
+      <Box
+        data-testid="layer-order-controls"
+        sx={{
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 0.75,
+        }}
+      >
+        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <Typography variant="labelMedium" color="text.secondary">
+            Layer Order
+          </Typography>
+          <Typography
+            variant="labelSmall"
+            data-testid="selected-element-layer-position"
+            sx={{
+              ...SELECTED_META_CHIP_SX,
+              fontVariantNumeric: 'tabular-nums',
+            }}
+          >
+            {layerPosition} / {layerTotal}
+          </Typography>
+        </Box>
+        <Box
+          sx={{
+            display: 'grid',
+            gridTemplateColumns: '1fr 1fr',
+            gap: 0.75,
+          }}
+        >
+          {layerActions.map((action) => (
+            <M3Button
+              key={action.label}
+              m3Variant="outlined"
+              size="small"
+              disabled={action.disabled}
+              startIcon={<M3Icon name={action.icon} size={15} />}
+              onClick={action.onClick}
+              sx={{
+                minHeight: 30,
+                px: 0.75,
+                fontSize: '0.7rem',
+                whiteSpace: 'nowrap',
+                justifyContent: 'flex-start',
+              }}
+            >
+              {action.label}
+            </M3Button>
+          ))}
+        </Box>
+      </Box>
+    </>
+  );
+}
+
 export default function EditorPage() {
   const navigate = useNavigate();
   const { projectName, saveStatus, statusErrorMessage, renameProject, flushPendingSave } =
@@ -174,14 +351,20 @@ export default function EditorPage() {
   const archetype = useEditorStore((state) => state.archetype);
   const dieline = useEditorStore((state) => state.dieline);
   const dimensions = useEditorStore((state) => state.dimensions);
+  const activeSide = useEditorStore((state) => state.activeSide);
   const elements = useEditorStore((state) => state.elements);
   const committedElements = useEditorStore((state) => state.committedElements);
   const selectedElementId = useEditorStore((state) => state.selectedElementId);
   const foldAngle = useEditorStore((state) => state.foldAngle);
+  const setActiveSide = useEditorStore((state) => state.setActiveSide);
   const addElement = useEditorStore((state) => state.addElement);
   const addImageElement = useEditorStore((state) => state.addImageElement);
   const updateElement = useEditorStore((state) => state.updateElement);
   const removeElement = useEditorStore((state) => state.removeElement);
+  const bringToFront = useEditorStore((state) => state.bringToFront);
+  const sendToBack = useEditorStore((state) => state.sendToBack);
+  const bringForward = useEditorStore((state) => state.bringForward);
+  const sendBackward = useEditorStore((state) => state.sendBackward);
   const commitElements = useEditorStore((state) => state.commitElements);
   const setFoldAngle = useEditorStore((state) => state.setFoldAngle);
   const setArchetype = useEditorStore((state) => state.setArchetype);
@@ -214,6 +397,17 @@ export default function EditorPage() {
     ? (dieline.faces.find((face) => face.id === selectedElement.faceId)?.name ??
       selectedElement.faceId)
     : null;
+  const selectedSideElements = selectedElement
+    ? elements.filter((el) => el.side === selectedElement.side).sort((a, b) => a.zIndex - b.zIndex)
+    : [];
+  const selectedLayerIdx = selectedElement
+    ? selectedSideElements.findIndex((el) => el.id === selectedElement.id)
+    : -1;
+  const canMoveForward =
+    selectedLayerIdx !== -1 && selectedLayerIdx < selectedSideElements.length - 1;
+  const canMoveBackward = selectedLayerIdx > 0;
+  const layerPosition = selectedLayerIdx !== -1 ? selectedLayerIdx + 1 : 1;
+  const layerTotal = Math.max(1, selectedSideElements.length);
 
   const clearCommitTimer = () => {
     if (commitTimerRef.current !== null) {
@@ -1006,6 +1200,58 @@ export default function EditorPage() {
             display: 'flex',
           }}
         >
+          {/* Floating M3 Segmented Pill: Outside Design vs Inside Design */}
+          <Box
+            role="group"
+            aria-label="Surface side"
+            onMouseDown={(event) => event.stopPropagation()}
+            onPointerDown={(event) => event.stopPropagation()}
+            sx={{
+              position: 'absolute',
+              top: 12,
+              left: '50%',
+              transform: 'translateX(-50%)',
+              zIndex: 12,
+              display: 'inline-flex',
+              alignItems: 'center',
+              p: '3px',
+              gap: '3px',
+              borderRadius: '9999px',
+              backgroundColor: 'var(--md-sys-color-surface-container-high)',
+              border: '1px solid var(--md-sys-color-outline-variant)',
+              boxShadow: '0px 1px 3px rgba(0, 0, 0, 0.16)',
+            }}
+          >
+            {(
+              [
+                { id: 'outside', label: 'Outside Design', icon: 'layers' },
+                { id: 'inside', label: 'Inside Design', icon: 'flip' },
+              ] as const
+            ).map((option) => {
+              const isSelectedSide = activeSide === option.id;
+              return (
+                <M3Button
+                  key={option.id}
+                  m3Variant={isSelectedSide ? 'tonal' : 'text'}
+                  size="small"
+                  aria-pressed={isSelectedSide}
+                  startIcon={<M3Icon name={option.icon} size={16} />}
+                  onClick={() => setActiveSide(option.id)}
+                  sx={{
+                    minHeight: 30,
+                    px: 1.5,
+                    whiteSpace: 'nowrap',
+                    color: isSelectedSide
+                      ? 'var(--md-sys-color-on-secondary-container)'
+                      : 'var(--md-sys-color-on-surface-variant)',
+                  }}
+                >
+                  {option.label}
+                </M3Button>
+              );
+            })}
+          </Box>
+
           <DielineStage isActive={viewMode === '2d'} />
           {viewMode === '3d' && (
             <Suspense
@@ -1124,43 +1370,20 @@ export default function EditorPage() {
                 gap: 2,
               }}
             >
-              <Box
-                sx={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  gap: 1,
-                }}
-              >
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}>
-                  <Typography variant="titleSmall" component="h2" color="text.primary">
-                    Text Properties
-                  </Typography>
-                  {selectedFaceName && (
-                    <Typography
-                      variant="labelSmall"
-                      component="span"
-                      sx={{
-                        px: 1,
-                        py: 0.25,
-                        borderRadius: '9999px',
-                        backgroundColor: 'var(--md-sys-color-surface-container-high)',
-                        color: 'var(--md-sys-color-on-surface-variant)',
-                      }}
-                    >
-                      {selectedFaceName}
-                    </Typography>
-                  )}
-                </Box>
-                <M3IconButton
-                  icon="delete"
-                  label="Delete selected element"
-                  tooltip="Remove element"
-                  size="small"
-                  onClick={handleDeleteSelected}
-                  sx={{ color: 'var(--md-sys-color-error)' }}
-                />
-              </Box>
+              <SelectedElementMetaSection
+                title="Text Properties"
+                side={selectedElement.side}
+                faceName={selectedFaceName}
+                layerPosition={layerPosition}
+                layerTotal={layerTotal}
+                canMoveForward={canMoveForward}
+                canMoveBackward={canMoveBackward}
+                onDelete={handleDeleteSelected}
+                onBringToFront={() => bringToFront(selectedElement.id)}
+                onBringForward={() => bringForward(selectedElement.id)}
+                onSendBackward={() => sendBackward(selectedElement.id)}
+                onSendToBack={() => sendToBack(selectedElement.id)}
+              />
 
               <M3TextField
                 label="Text Content"
@@ -1311,43 +1534,20 @@ export default function EditorPage() {
                 gap: 2,
               }}
             >
-              <Box
-                sx={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  gap: 1,
-                }}
-              >
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}>
-                  <Typography variant="titleSmall" component="h2" color="text.primary">
-                    Image Artwork
-                  </Typography>
-                  {selectedFaceName && (
-                    <Typography
-                      variant="labelSmall"
-                      component="span"
-                      sx={{
-                        px: 1,
-                        py: 0.25,
-                        borderRadius: '9999px',
-                        backgroundColor: 'var(--md-sys-color-surface-container-high)',
-                        color: 'var(--md-sys-color-on-surface-variant)',
-                      }}
-                    >
-                      {selectedFaceName}
-                    </Typography>
-                  )}
-                </Box>
-                <M3IconButton
-                  icon="delete"
-                  label="Delete selected element"
-                  tooltip="Remove element"
-                  size="small"
-                  onClick={handleDeleteSelected}
-                  sx={{ color: 'var(--md-sys-color-error)' }}
-                />
-              </Box>
+              <SelectedElementMetaSection
+                title="Image Artwork"
+                side={selectedElement.side}
+                faceName={selectedFaceName}
+                layerPosition={layerPosition}
+                layerTotal={layerTotal}
+                canMoveForward={canMoveForward}
+                canMoveBackward={canMoveBackward}
+                onDelete={handleDeleteSelected}
+                onBringToFront={() => bringToFront(selectedElement.id)}
+                onBringForward={() => bringForward(selectedElement.id)}
+                onSendBackward={() => sendBackward(selectedElement.id)}
+                onSendToBack={() => sendToBack(selectedElement.id)}
+              />
 
               <Box
                 sx={{
@@ -1397,43 +1597,20 @@ export default function EditorPage() {
                 gap: 2,
               }}
             >
-              <Box
-                sx={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  gap: 1,
-                }}
-              >
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}>
-                  <Typography variant="titleSmall" component="h2" color="text.primary">
-                    Shape Properties
-                  </Typography>
-                  {selectedFaceName && (
-                    <Typography
-                      variant="labelSmall"
-                      component="span"
-                      sx={{
-                        px: 1,
-                        py: 0.25,
-                        borderRadius: '9999px',
-                        backgroundColor: 'var(--md-sys-color-surface-container-high)',
-                        color: 'var(--md-sys-color-on-surface-variant)',
-                      }}
-                    >
-                      {selectedFaceName}
-                    </Typography>
-                  )}
-                </Box>
-                <M3IconButton
-                  icon="delete"
-                  label="Delete selected element"
-                  tooltip="Remove element"
-                  size="small"
-                  onClick={handleDeleteSelected}
-                  sx={{ color: 'var(--md-sys-color-error)' }}
-                />
-              </Box>
+              <SelectedElementMetaSection
+                title="Shape Properties"
+                side={selectedElement.side}
+                faceName={selectedFaceName}
+                layerPosition={layerPosition}
+                layerTotal={layerTotal}
+                canMoveForward={canMoveForward}
+                canMoveBackward={canMoveBackward}
+                onDelete={handleDeleteSelected}
+                onBringToFront={() => bringToFront(selectedElement.id)}
+                onBringForward={() => bringForward(selectedElement.id)}
+                onSendBackward={() => sendBackward(selectedElement.id)}
+                onSendToBack={() => sendToBack(selectedElement.id)}
+              />
 
               {selectedElement.fill !== 'none' && (
                 <Box

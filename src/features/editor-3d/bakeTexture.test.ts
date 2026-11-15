@@ -249,6 +249,52 @@ describe('bakeTexture', () => {
     );
   });
 
+  it('filters elements cleanly by surface side (outside vs inside) when baking textures', () => {
+    const dieline = generateTuckEndBox({
+      length: 100,
+      width: 50,
+      height: 100,
+      thickness: 0.5,
+      bleedSize: 3,
+    });
+    const front = dieline.faces.find((f) => f.id === 'front')!;
+
+    const outsideEl = makeSampleText({ id: 'out-1', side: 'outside', content: 'OUTSIDE' });
+    const insideEl = makeSampleText({ id: 'in-1', side: 'inside', content: 'INSIDE' });
+    const combined = [outsideEl, insideEl];
+
+    expect(getFaceElementsForFace('front', combined, 'outside').map((el) => el.id)).toEqual([
+      'out-1',
+    ]);
+    expect(getFaceElementsForFace('front', combined, 'inside').map((el) => el.id)).toEqual([
+      'in-1',
+    ]);
+    expect(buildFaceBakeSignature(front, combined, 2, 'outside')).not.toBe(
+      buildFaceBakeSignature(front, combined, 2, 'inside'),
+    );
+
+    const fillText = vi.fn();
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({
+      fillStyle: '',
+      font: '',
+      textAlign: 'left',
+      textBaseline: 'alphabetic',
+      globalAlpha: 1,
+      fillRect: vi.fn(),
+      fillText,
+      drawImage: vi.fn(),
+      save: vi.fn(),
+      restore: vi.fn(),
+      translate: vi.fn(),
+      rotate: vi.fn(),
+    } as unknown as CanvasRenderingContext2D);
+
+    const insideTex = bakeFaceTexture(front, combined, 2, undefined, 'inside');
+    expect(fillText).toHaveBeenCalledTimes(1);
+    expect(fillText.mock.calls[0]?.[0]).toBe('INSIDE');
+    insideTex.dispose();
+  });
+
   it('bakes vector ShapeElement rects and circles onto 3D face textures in zIndex order', () => {
     const dieline = generateTuckEndBox({
       length: 80,

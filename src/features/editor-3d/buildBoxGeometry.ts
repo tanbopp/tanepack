@@ -19,6 +19,7 @@ export interface KinematicFacePart {
   sourceFaceId: string;
   name: string;
   geometry: THREE.BufferGeometry;
+  outsideGeometry: THREE.BufferGeometry;
   edgeGeometry: THREE.BufferGeometry;
   boundsMm: FaceBoundsMm;
   isInnerLayer: boolean;
@@ -344,6 +345,18 @@ function applyNormalizedFaceUvs(
   geometry.setAttribute('uv', new THREE.BufferAttribute(uvArray, 2));
 }
 
+function createOutwardUvFlippedGeometry(source: THREE.BufferGeometry): THREE.BufferGeometry {
+  const flipped = source.clone();
+  const uvAttr = flipped.getAttribute('uv');
+  if (uvAttr instanceof THREE.BufferAttribute) {
+    for (let i = 0; i < uvAttr.count; i += 1) {
+      uvAttr.setX(i, 1 - uvAttr.getX(i));
+    }
+    uvAttr.needsUpdate = true;
+  }
+  return flipped;
+}
+
 function buildGeometryPartFromShape(
   faceId: string,
   sourceFaceId: string,
@@ -360,6 +373,8 @@ function buildGeometryPartFromShape(
   geometry.computeVertexNormals();
   geometry.computeBoundingBox();
 
+  // Exterior surface looks onto local -Y (BackSide), so u is mirrored (1 - u) to read left-to-right
+  const outsideGeometry = createOutwardUvFlippedGeometry(geometry);
   const edgeGeometry = new THREE.EdgesGeometry(geometry, 1);
 
   return {
@@ -367,6 +382,7 @@ function buildGeometryPartFromShape(
     sourceFaceId,
     name,
     geometry,
+    outsideGeometry,
     edgeGeometry,
     boundsMm,
     isInnerLayer: layerOrder === 0,
@@ -717,6 +733,7 @@ export function buildBoxGeometry(dieline: Dieline): KinematicBoxModel {
     dispose: () => {
       for (const part of createdParts) {
         part.geometry.dispose();
+        part.outsideGeometry.dispose();
         part.edgeGeometry.dispose();
       }
     },

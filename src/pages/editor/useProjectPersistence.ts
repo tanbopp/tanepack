@@ -130,7 +130,6 @@ export function useProjectPersistence(): ProjectPersistenceState {
   );
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const projectCreatedAtRef = useRef(new Date().toISOString());
-  const insideElementsRef = useRef<DesignElement[]>([]);
   const hydratedProjectIdRef = useRef<string | null>(null);
   const appliedTemplateKeyRef = useRef<string | null>(null);
   const appliedDeepLinkKeyRef = useRef<string | null>(null);
@@ -165,7 +164,6 @@ export function useProjectPersistence(): ProjectPersistenceState {
       appliedTemplateKeyRef.current = null;
       appliedDeepLinkKeyRef.current = null;
       projectCreatedAtRef.current = new Date().toISOString();
-      insideElementsRef.current = [];
     }
     lastEditorProjectId = projectId;
 
@@ -283,11 +281,13 @@ export function useProjectPersistence(): ProjectPersistenceState {
     }
 
     const nextName = loaded.name.trim() || DEFAULT_PROJECT_NAME;
-    const outsideElements = loaded.layers.outside;
+    const combinedElements: DesignElement[] = [
+      ...loaded.layers.outside.map((el) => ({ ...el, side: 'outside' as const })),
+      ...loaded.layers.inside.map((el) => ({ ...el, side: 'inside' as const })),
+    ];
 
     hydratedProjectIdRef.current = projectId;
     projectCreatedAtRef.current = loaded.createdAt || new Date().toISOString();
-    insideElementsRef.current = loaded.layers.inside;
 
     const hydratedArchetype = loaded.dieline.archetype ?? 'tuck-end';
     const hydratedDieline = {
@@ -298,7 +298,7 @@ export function useProjectPersistence(): ProjectPersistenceState {
 
     syncedSnapshotRef.current = {
       dieline: hydratedDieline,
-      committedElements: outsideElements,
+      committedElements: combinedElements,
       name: nextName,
     };
 
@@ -306,8 +306,8 @@ export function useProjectPersistence(): ProjectPersistenceState {
       archetype: hydratedArchetype,
       dieline: hydratedDieline,
       dimensions: hydratedDieline.dimensions,
-      elements: outsideElements,
-      committedElements: outsideElements,
+      elements: combinedElements,
+      committedElements: combinedElements,
       selectedElementId: null,
     });
   }, [projectId, projectQuery.data, projectQuery.isSuccess]);
@@ -319,13 +319,15 @@ export function useProjectPersistence(): ProjectPersistenceState {
 
   const saveMutation = useMutation({
     mutationFn: async (variables: SaveMutationVariables) => {
+      const outsideElements = variables.committedElements.filter((el) => el.side !== 'inside');
+      const insideElements = variables.committedElements.filter((el) => el.side === 'inside');
       const payload = buildProjectDocument({
         id: variables.projectId,
         name: variables.name,
         createdAt: projectCreatedAtRef.current,
         dieline: variables.dieline,
-        outsideElements: variables.committedElements,
-        insideElements: insideElementsRef.current,
+        outsideElements,
+        insideElements,
         seedColor: env.seedColor,
       });
 

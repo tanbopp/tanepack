@@ -3,6 +3,7 @@ export { DielineStage, type DielineStageProps } from './DielineStage';
 export {
   type AddImageElementOptions,
   type AddTextElementOptions,
+  type BoxSide,
   clampBoxDimensionMm,
   DEFAULT_DIELINE_DIMENSIONS,
   DEFAULT_IMAGE_SIZE_MM,
@@ -32,12 +33,18 @@ export {
   type SelectionFrame,
 } from './transform';
 export {
-  clampElementPositionToFace,
   clampZoom,
   computeFitViewport,
+  computeSnap,
+  type ComputeSnapOptions,
+  type ElementFootprintMm,
+  getElementFootprintMm,
   MAX_STAGE_ZOOM,
   MIN_STAGE_ZOOM,
   screenDeltaPxToMm,
+  SNAP_THRESHOLD_MM,
+  type SnapGuideLine,
+  type SnapResult,
   STAGE_FIT_PADDING_PX,
   type StageSize,
   type StageViewport,

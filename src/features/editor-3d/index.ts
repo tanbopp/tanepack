@@ -2,6 +2,7 @@
 export {
   type BakeableArtworkElement,
   bakeFaceTexture,
+  type BakeSide,
   buildFaceBakeSignature,
   computeBakedTextureSize,
   DEFAULT_BAKE_SCALE,

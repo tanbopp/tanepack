@@ -712,4 +712,51 @@ describe('EditorPage', () => {
       screen.getByTestId('dieline-svg').querySelector('[data-layer="artwork"] text')?.textContent,
     ).toBe('Tanepack');
   });
+
+  it('supports layer ordering controls, Outside/Inside surface switching, and saving/reloading both layers', async () => {
+    renderEditorPage();
+
+    // Add two outside elements so we can verify Layer Order buttons update zIndex and positions
+    fireEvent.click(screen.getByRole('button', { name: 'Add Text' }));
+    const firstText = useEditorStore.getState().elements[0]!;
+    fireEvent.change(screen.getByLabelText('Text Content'), { target: { value: 'Back Layer' } });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add Text' }));
+    const secondText = useEditorStore.getState().elements[1]!;
+    fireEvent.change(screen.getByLabelText('Text Content'), { target: { value: 'Front Layer' } });
+
+    expect(screen.getByTestId('selected-element-side-badge').textContent).toBe('Outside');
+    expect(screen.getByTestId('selected-element-layer-position').textContent).toBe('2 / 2');
+
+    // Send top element backward -> now 1 / 2
+    fireEvent.click(screen.getByRole('button', { name: 'Send Backward' }));
+    expect(screen.getByTestId('selected-element-layer-position').textContent).toBe('1 / 2');
+    const reordered = useEditorStore.getState().committedElements;
+    expect(reordered.find((e) => e.id === secondText.id)?.zIndex).toBe(1);
+    expect(reordered.find((e) => e.id === firstText.id)?.zIndex).toBe(2);
+
+    // Bring to Front returns secondText to 2 / 2
+    fireEvent.click(screen.getByRole('button', { name: 'Bring to Front' }));
+    expect(screen.getByTestId('selected-element-layer-position').textContent).toBe('2 / 2');
+
+    // Toggle to Inside Design and add 'Hello Inside'
+    fireEvent.click(screen.getByRole('button', { name: 'Inside Design' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add Text' }));
+    fireEvent.change(screen.getByLabelText('Text Content'), { target: { value: 'Hello Inside' } });
+    fireEvent.blur(screen.getByLabelText('Text Content'));
+    expect(screen.getByTestId('selected-element-side-badge').textContent).toBe('Inside');
+    expect(screen.getByTestId('dieline-svg').textContent).toContain('Hello Inside');
+    expect(screen.getByTestId('dieline-svg').textContent).not.toContain('Front Layer');
+
+    // Switch back to Outside Design -> 'Hello Inside' hidden in 2D, outside items restored
+    fireEvent.click(screen.getByRole('button', { name: 'Outside Design' }));
+    expect(screen.getByTestId('dieline-svg').textContent).toContain('Front Layer');
+    expect(screen.getByTestId('dieline-svg').textContent).not.toContain('Hello Inside');
+    expect(
+      useEditorStore.getState().committedElements.filter((e) => e.side === 'outside'),
+    ).toHaveLength(2);
+    expect(
+      useEditorStore.getState().committedElements.filter((e) => e.side === 'inside'),
+    ).toHaveLength(1);
+  });
 });

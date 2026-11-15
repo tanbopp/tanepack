@@ -103,6 +103,12 @@ describe('BoxViewer geometry lifecycle', () => {
     expect(createdModels[1]?.dispose).not.toHaveBeenCalled();
     expect(mockInvalidate).toHaveBeenCalled();
 
+    // Renders dedicated single-sided outside & inside meshes per panel to prevent Z-fighting
+    const outsideMesh = document.querySelector('mesh[name="face-front-outside"]');
+    const insideMesh = document.querySelector('mesh[name="face-front-inside"]');
+    expect(outsideMesh).not.toBeNull();
+    expect(insideMesh).not.toBeNull();
+
     unmount();
     expect(createdModels[1]?.dispose).toHaveBeenCalledTimes(1);
   });

@@ -12,11 +12,9 @@ import {
   type DielineArchetype,
   generateDieline,
   roundMm,
-  type SvgPathBoundsMm,
 } from '@entities/dieline';
 import type { Template } from '@entities/template';
 import { createEntityId } from '@shared/lib/id';
-import { clampElementPositionToFace } from './viewport';
 
 export const DEFAULT_DIELINE_DIMENSIONS: Dieline['dimensions'] = {
   length: 100,
@@ -41,6 +39,7 @@ export function clampBoxDimensionMm(value: number, fallback: number): number {
 
 export interface AddTextElementOptions {
   faceId?: string | undefined;
+  side?: 'outside' | 'inside' | undefined;
   content?: string | undefined;
   x?: number | undefined;
   y?: number | undefined;
@@ -49,6 +48,7 @@ export interface AddTextElementOptions {
 export interface AddImageElementOptions {
   src: string;
   faceId?: string | undefined;
+  side?: 'outside' | 'inside' | undefined;
   naturalWidth?: number | undefined;
   naturalHeight?: number | undefined;
   width?: number | undefined;
@@ -58,28 +58,38 @@ export interface AddImageElementOptions {
 }
 
 export interface ElementPatch {
+  faceId?: string | undefined;
   content?: string | undefined;
   fill?: string | undefined;
   stroke?: string | undefined;
   opacity?: number | undefined;
+  zIndex?: number | undefined;
   transform?: Partial<DesignElement['transform']> | undefined;
   style?: Partial<TextElement['style']> | undefined;
 }
 
 export type TextElementPatch = ElementPatch;
 
+export type BoxSide = 'outside' | 'inside';
+
 export interface EditorStageStoreState {
   archetype: DielineArchetype;
   dieline: Dieline;
   dimensions: Dieline['dimensions'];
+  activeSide: BoxSide;
   elements: DesignElement[];
   committedElements: DesignElement[];
   selectedElementId: string | null;
   foldAngle: number;
+  setActiveSide: (side: BoxSide) => void;
   addElement: (options?: AddTextElementOptions) => TextElement;
   addImageElement: (options: AddImageElementOptions) => ImageElement;
   updateElement: (id: string, patch: ElementPatch, commit?: boolean) => void;
   removeElement: (id: string) => void;
+  bringToFront: (id: string) => void;
+  sendToBack: (id: string) => void;
+  bringForward: (id: string) => void;
+  sendBackward: (id: string) => void;
   selectElement: (id: string | null) => void;
   commitElements: () => void;
   setFoldAngle: (angle: number) => void;
@@ -199,35 +209,17 @@ function reconcileElementsForDieline(
   nextDieline: Dieline,
   items: DesignElement[],
 ): DesignElement[] {
-  const boundsByFaceId = new Map<string, SvgPathBoundsMm>();
-  for (const face of nextDieline.faces) {
-    boundsByFaceId.set(face.id, computeSvgPathBoundsMm(face.path));
-  }
+  const validFaceIds = new Set(nextDieline.faces.map((face) => face.id));
 
   let changed = false;
   const reconciled = items.map((element) => {
-    let targetFaceId = element.faceId;
-    if (!boundsByFaceId.has(targetFaceId)) {
-      const mapped = ARCHETYPE_FACE_FALLBACKS[targetFaceId];
-      targetFaceId = mapped && boundsByFaceId.has(mapped) ? mapped : 'front';
-    }
-
-    const faceBounds = boundsByFaceId.get(targetFaceId);
-    if (!faceBounds) {
+    if (validFaceIds.has(element.faceId)) {
       return element;
     }
 
-    const nextPos = clampElementPositionToFace(
-      element,
-      element.transform.x,
-      element.transform.y,
-      faceBounds,
-    );
-    if (
-      targetFaceId === element.faceId &&
-      nextPos.x === element.transform.x &&
-      nextPos.y === element.transform.y
-    ) {
+    const mapped = ARCHETYPE_FACE_FALLBACKS[element.faceId];
+    const targetFaceId = mapped && validFaceIds.has(mapped) ? mapped : 'front';
+    if (targetFaceId === element.faceId) {
       return element;
     }
 
@@ -235,15 +227,74 @@ function reconcileElementsForDieline(
     return {
       ...element,
       faceId: targetFaceId,
-      transform: {
-        ...element.transform,
-        x: nextPos.x,
-        y: nextPos.y,
-      },
     };
   });
 
   return changed ? reconciled : items;
+}
+
+type LayerReorderMode = 'front' | 'back' | 'forward' | 'backward';
+
+function nextSideZIndex(items: readonly DesignElement[], side: BoxSide): number {
+  let maxZ = 0;
+  for (const el of items) {
+    if (el.side === side && el.zIndex > maxZ) {
+      maxZ = el.zIndex;
+    }
+  }
+  return maxZ + 1;
+}
+
+function reorderElementLayer(
+  items: DesignElement[],
+  id: string,
+  mode: LayerReorderMode,
+): DesignElement[] {
+  const target = items.find((el) => el.id === id);
+  if (!target) {
+    return items;
+  }
+
+  const sameSideSorted = items
+    .filter((el) => el.side === target.side)
+    .sort((a, b) => a.zIndex - b.zIndex);
+
+  const currentIdx = sameSideSorted.findIndex((el) => el.id === id);
+  if (currentIdx === -1) {
+    return items;
+  }
+
+  let nextIdx = currentIdx;
+  if (mode === 'front') {
+    nextIdx = sameSideSorted.length - 1;
+  } else if (mode === 'back') {
+    nextIdx = 0;
+  } else if (mode === 'forward') {
+    nextIdx = Math.min(sameSideSorted.length - 1, currentIdx + 1);
+  } else {
+    nextIdx = Math.max(0, currentIdx - 1);
+  }
+
+  if (nextIdx === currentIdx) {
+    return items;
+  }
+
+  const reordered = [...sameSideSorted];
+  const [moved] = reordered.splice(currentIdx, 1);
+  if (!moved) {
+    return items;
+  }
+  reordered.splice(nextIdx, 0, moved);
+
+  const nextZById = new Map<string, number>();
+  reordered.forEach((el, index) => {
+    nextZById.set(el.id, index + 1);
+  });
+
+  return items.map((el) => {
+    const assignedZ = nextZById.get(el.id);
+    return assignedZ !== undefined && assignedZ !== el.zIndex ? { ...el, zIndex: assignedZ } : el;
+  });
 }
 
 function patchElement(element: DesignElement, patch: ElementPatch): DesignElement {
@@ -251,10 +302,15 @@ function patchElement(element: DesignElement, patch: ElementPatch): DesignElemen
     ? { ...element.transform, ...patch.transform }
     : element.transform;
   const nextOpacity = patch.opacity ?? element.opacity;
+  const basePatch = {
+    ...(patch.faceId !== undefined ? { faceId: patch.faceId } : {}),
+    ...(patch.zIndex !== undefined ? { zIndex: patch.zIndex } : {}),
+  };
 
   if (element.type === 'text') {
     return {
       ...element,
+      ...basePatch,
       ...(patch.content !== undefined ? { content: patch.content } : {}),
       opacity: nextOpacity,
       transform: nextTransform,
@@ -265,6 +321,7 @@ function patchElement(element: DesignElement, patch: ElementPatch): DesignElemen
   if (element.type === 'shape') {
     return {
       ...element,
+      ...basePatch,
       ...(patch.fill !== undefined ? { fill: patch.fill } : {}),
       ...(patch.stroke !== undefined ? { stroke: patch.stroke } : {}),
       opacity: nextOpacity,
@@ -274,6 +331,7 @@ function patchElement(element: DesignElement, patch: ElementPatch): DesignElemen
 
   return {
     ...element,
+    ...basePatch,
     opacity: nextOpacity,
     transform: nextTransform,
   };
@@ -283,10 +341,25 @@ export const useEditorStore = create<EditorStageStoreState>((set) => ({
   archetype: 'tuck-end',
   dieline: createInitialDieline('tuck-end'),
   dimensions: { ...DEFAULT_DIELINE_DIMENSIONS },
+  activeSide: 'outside',
   elements: [],
   committedElements: [],
   selectedElementId: null,
   foldAngle: 0,
+
+  setActiveSide: (side) =>
+    set((state) => {
+      if (state.activeSide === side) {
+        return state;
+      }
+      const selected = state.selectedElementId
+        ? state.elements.find((el) => el.id === state.selectedElementId)
+        : undefined;
+      return {
+        activeSide: side,
+        selectedElementId: selected && selected.side !== side ? null : state.selectedElementId,
+      };
+    }),
 
   addElement: (options) => {
     let created: TextElement | null = null;
@@ -296,7 +369,10 @@ export const useEditorStore = create<EditorStageStoreState>((set) => ({
         state.dieline,
         options?.faceId ?? 'front',
       );
-      const existingCount = state.elements.filter((el) => el.faceId === resolvedFaceId).length;
+      const targetSide = options?.side ?? state.activeSide;
+      const existingCount = state.elements.filter(
+        (el) => el.faceId === resolvedFaceId && el.side === targetSide,
+      ).length;
       const staggerOffsets = [0, -18, 18, -32, 32];
       const offsetIndex = existingCount % staggerOffsets.length;
       const yOffset = staggerOffsets[offsetIndex] ?? 0;
@@ -305,7 +381,7 @@ export const useEditorStore = create<EditorStageStoreState>((set) => ({
         id: createEntityId(10),
         type: 'text',
         faceId: resolvedFaceId,
-        side: 'outside',
+        side: targetSide,
         content: options?.content ?? DEFAULT_TEXT_CONTENT,
         transform: {
           x: options?.x ?? bounds.center.x,
@@ -315,7 +391,7 @@ export const useEditorStore = create<EditorStageStoreState>((set) => ({
           rotation: 0,
         },
         opacity: 1,
-        zIndex: state.elements.length + 1,
+        zIndex: nextSideZIndex(state.elements, targetSide),
         style: {
           fontFamily: 'Google Sans, sans-serif',
           fontSize: 14,
@@ -358,11 +434,12 @@ export const useEditorStore = create<EditorStageStoreState>((set) => ({
       const width = options.width ?? roundMm(naturalWidth * fitScale);
       const height = options.height ?? roundMm(naturalHeight * fitScale);
 
+      const targetSide = options.side ?? state.activeSide;
       const imageElement: ImageElement = {
         id: createEntityId(10),
         type: 'image',
         faceId: resolvedFaceId,
-        side: 'outside',
+        side: targetSide,
         src: options.src,
         naturalWidth: options.naturalWidth ?? DEFAULT_IMAGE_SIZE_MM,
         naturalHeight: options.naturalHeight ?? DEFAULT_IMAGE_SIZE_MM,
@@ -375,7 +452,7 @@ export const useEditorStore = create<EditorStageStoreState>((set) => ({
           rotation: 0,
         },
         opacity: 1,
-        zIndex: state.elements.length + 1,
+        zIndex: nextSideZIndex(state.elements, targetSide),
       };
 
       created = imageElement;
@@ -412,6 +489,38 @@ export const useEditorStore = create<EditorStageStoreState>((set) => ({
         committedElements: nextElements,
         selectedElementId: state.selectedElementId === id ? null : state.selectedElementId,
       };
+    }),
+
+  bringToFront: (id) =>
+    set((state) => {
+      const nextElements = reorderElementLayer(state.elements, id, 'front');
+      return nextElements === state.elements
+        ? state
+        : { elements: nextElements, committedElements: nextElements };
+    }),
+
+  sendToBack: (id) =>
+    set((state) => {
+      const nextElements = reorderElementLayer(state.elements, id, 'back');
+      return nextElements === state.elements
+        ? state
+        : { elements: nextElements, committedElements: nextElements };
+    }),
+
+  bringForward: (id) =>
+    set((state) => {
+      const nextElements = reorderElementLayer(state.elements, id, 'forward');
+      return nextElements === state.elements
+        ? state
+        : { elements: nextElements, committedElements: nextElements };
+    }),
+
+  sendBackward: (id) =>
+    set((state) => {
+      const nextElements = reorderElementLayer(state.elements, id, 'backward');
+      return nextElements === state.elements
+        ? state
+        : { elements: nextElements, committedElements: nextElements };
     }),
 
   selectElement: (id) => set({ selectedElementId: id }),
@@ -508,6 +617,7 @@ export const useEditorStore = create<EditorStageStoreState>((set) => ({
       archetype: 'tuck-end',
       dieline: createInitialDieline('tuck-end'),
       dimensions: { ...DEFAULT_DIELINE_DIMENSIONS },
+      activeSide: 'outside',
       elements: [],
       committedElements: [],
       selectedElementId: null,

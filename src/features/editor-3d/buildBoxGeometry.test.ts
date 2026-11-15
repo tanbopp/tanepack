@@ -457,4 +457,21 @@ describe('buildBoxGeometry', () => {
 
     mixModel.dispose();
   });
+
+  it('builds outsideGeometry with horizontally mirrored UVs (1 - u) for BackSide exterior readability', () => {
+    const tuck = generateTuckEndBox(SAMPLE_DIMENSIONS);
+    const model = buildBoxGeometry(tuck);
+    const frontPart = model.root.faces.find((face) => face.faceId === 'front')!;
+    const insideUv = frontPart.geometry.getAttribute('uv');
+    const outsideUv = frontPart.outsideGeometry.getAttribute('uv');
+
+    expect(insideUv.count).toBeGreaterThan(0);
+    expect(outsideUv.count).toBe(insideUv.count);
+    for (let i = 0; i < insideUv.count; i += 1) {
+      expect(outsideUv.getX(i)).toBeCloseTo(1 - insideUv.getX(i), 5);
+      expect(outsideUv.getY(i)).toBeCloseTo(insideUv.getY(i), 5);
+    }
+
+    model.dispose();
+  });
 });

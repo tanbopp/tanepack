@@ -103,12 +103,12 @@ describe('useEditorStore', () => {
     expect(useEditorStore.getState().foldAngle).toBe(0);
   });
 
-  it('regenerates dieline and dimensions on setDimensions, preserving in-bounds artwork and clamping out-of-bounds artwork', () => {
+  it('regenerates dieline and dimensions on setDimensions while preserving free-form artwork coordinates', () => {
     const text = useEditorStore.getState().addElement();
     const initialX = text.transform.x;
     const initialY = text.transform.y;
 
-    // Expanding length keeps front-centered text safely inside new bounds in place
+    // Expanding length keeps front-centered text coordinates intact
     useEditorStore.getState().setDimensions(150, 50, 100);
     const expanded = useEditorStore.getState();
     expect(expanded.dimensions.length).toBe(150);
@@ -117,11 +117,9 @@ describe('useEditorStore', () => {
     expect(expanded.elements[0]?.transform.x).toBe(initialX);
     expect(expanded.elements[0]?.transform.y).toBe(initialY);
 
-    // Shrinking box to 50x50x50 clamps text and committedElements safely into the smaller front face
+    // Shrinking box to 50x50x50 preserves free-form placement instead of clamping back into shrunk panel bounds
     useEditorStore.getState().setDimensions(50, 50, 50);
     const shrunk = useEditorStore.getState();
-    const shrunkFront = shrunk.dieline.faces.find((f) => f.id === 'front')!;
-    const shrunkBounds = computeSvgPathBoundsMm(shrunkFront.path);
     expect(shrunk.dimensions).toEqual({
       length: 50,
       width: 50,
@@ -130,10 +128,8 @@ describe('useEditorStore', () => {
       bleedSize: 3,
     });
     expect(shrunk.dieline.totalWidth).toBe(217);
-    expect(shrunk.elements[0]!.transform.x).toBeGreaterThanOrEqual(shrunkBounds.minX);
-    expect(shrunk.elements[0]!.transform.x).toBeLessThanOrEqual(shrunkBounds.maxX);
-    expect(shrunk.elements[0]!.transform.y).toBeGreaterThanOrEqual(shrunkBounds.minY);
-    expect(shrunk.elements[0]!.transform.y).toBeLessThanOrEqual(shrunkBounds.maxY);
+    expect(shrunk.elements[0]!.transform.x).toBe(initialX);
+    expect(shrunk.elements[0]!.transform.y).toBe(initialY);
     expect(shrunk.committedElements[0]!.transform).toEqual(shrunk.elements[0]!.transform);
 
     // Non-positive dimensions fall back safely; extreme values clamp within [10, 2000]
@@ -142,6 +138,46 @@ describe('useEditorStore', () => {
     expect(clamped.dimensions.length).toBe(50);
     expect(clamped.dimensions.width).toBe(50);
     expect(clamped.dimensions.height).toBe(2000);
+  });
+
+  it('tracks activeSide (outside vs inside), clears cross-side selection, and reorders per-side layer zIndex', () => {
+    expect(useEditorStore.getState().activeSide).toBe('outside');
+
+    const elA = useEditorStore.getState().addElement({ content: 'Layer A' });
+    const elB = useEditorStore.getState().addElement({ content: 'Layer B' });
+    const elC = useEditorStore.getState().addElement({ content: 'Layer C' });
+    expect([elA.zIndex, elB.zIndex, elC.zIndex]).toEqual([1, 2, 3]);
+
+    // Switching to inside creates inside elements without disturbing outside order and clears cross-side selection
+    useEditorStore.getState().setActiveSide('inside');
+    expect(useEditorStore.getState().selectedElementId).toBeNull();
+    const insideEl = useEditorStore.getState().addElement({ content: 'Inside Item' });
+    expect(insideEl.side).toBe('inside');
+    expect(insideEl.zIndex).toBe(1);
+
+    // Bring A to Front -> order becomes B(1), C(2), A(3)
+    useEditorStore.getState().bringToFront(elA.id);
+    const afterFront = useEditorStore
+      .getState()
+      .committedElements.filter((el) => el.side === 'outside');
+    expect(afterFront.find((e) => e.id === elB.id)?.zIndex).toBe(1);
+    expect(afterFront.find((e) => e.id === elC.id)?.zIndex).toBe(2);
+    expect(afterFront.find((e) => e.id === elA.id)?.zIndex).toBe(3);
+
+    // Send A Backward -> order becomes B(1), A(2), C(3)
+    useEditorStore.getState().sendBackward(elA.id);
+    expect(useEditorStore.getState().elements.find((e) => e.id === elA.id)?.zIndex).toBe(2);
+    expect(useEditorStore.getState().elements.find((e) => e.id === elC.id)?.zIndex).toBe(3);
+
+    // Send C to Back -> order becomes C(1), B(2), A(3)
+    useEditorStore.getState().sendToBack(elC.id);
+    expect(useEditorStore.getState().elements.find((e) => e.id === elC.id)?.zIndex).toBe(1);
+    expect(useEditorStore.getState().elements.find((e) => e.id === elB.id)?.zIndex).toBe(2);
+
+    // Bring C Forward -> order becomes B(1), C(2), A(3)
+    useEditorStore.getState().bringForward(elC.id);
+    expect(useEditorStore.getState().elements.find((e) => e.id === elC.id)?.zIndex).toBe(2);
+    expect(useEditorStore.getState().elements.find((e) => e.id === elB.id)?.zIndex).toBe(1);
   });
 
   it('applies templates cleanly with new dimensions, fresh element IDs, cleared selection, and committed 3D sync', () => {
