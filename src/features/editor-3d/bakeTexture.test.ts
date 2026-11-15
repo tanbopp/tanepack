@@ -293,6 +293,13 @@ describe('bakeTexture', () => {
     expect(fillText).toHaveBeenCalledTimes(1);
     expect(fillText.mock.calls[0]?.[0]).toBe('INSIDE');
     insideTex.dispose();
+
+    // Empty matching elements still return a valid white-filled CanvasTexture
+    fillText.mockClear();
+    const emptyInsideTex = bakeFaceTexture(front, [outsideEl], 2, undefined, 'inside');
+    expect(emptyInsideTex).toBeInstanceOf(THREE.CanvasTexture);
+    expect(fillText).not.toHaveBeenCalled();
+    emptyInsideTex.dispose();
   });
 
   it('bakes vector ShapeElement rects and circles onto 3D face textures in zIndex order', () => {

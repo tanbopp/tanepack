@@ -1075,7 +1075,7 @@ export function DielineStage({
 
           {/* Magnetic snap alignment guide lines rendered while dragging */}
           {snapGuides.length > 0 && (
-            <g data-layer="snap-guides" style={{ pointerEvents: 'none' }}>
+            <g data-layer="snap-guides" data-ui-overlay="true" style={{ pointerEvents: 'none' }}>
               {snapGuides.map((guide, index) => (
                 <line
                   key={`${guide.axis}-${index}`}

@@ -297,29 +297,37 @@ function SelectedElementMetaSection({
         </Box>
         <Box
           sx={{
-            display: 'grid',
-            gridTemplateColumns: '1fr 1fr',
-            gap: 0.75,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 0.5,
+            p: 0.5,
+            borderRadius: '12px',
+            border: '1px solid var(--md-sys-color-outline-variant)',
+            backgroundColor: 'var(--md-sys-color-surface)',
           }}
         >
           {layerActions.map((action) => (
-            <M3Button
+            <M3IconButton
               key={action.label}
-              m3Variant="outlined"
+              icon={action.icon}
+              label={action.label}
+              tooltip={action.label}
               size="small"
+              iconSize={18}
               disabled={action.disabled}
-              startIcon={<M3Icon name={action.icon} size={15} />}
               onClick={action.onClick}
               sx={{
-                minHeight: 30,
-                px: 0.75,
-                fontSize: '0.7rem',
-                whiteSpace: 'nowrap',
-                justifyContent: 'flex-start',
+                borderRadius: '8px',
+                color: 'var(--md-sys-color-on-surface)',
+                '&:hover:not(:disabled)': {
+                  backgroundColor: 'var(--md-sys-color-surface-container-highest)',
+                },
+                '&.Mui-disabled': {
+                  opacity: 0.38,
+                },
               }}
-            >
-              {action.label}
-            </M3Button>
+            />
           ))}
         </Box>
       </Box>

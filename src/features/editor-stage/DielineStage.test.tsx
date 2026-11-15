@@ -216,6 +216,7 @@ describe('DielineStage component', () => {
     const guideLines = screen.getAllByTestId('snap-guide-line');
     expect(guideLines.length).toBeGreaterThanOrEqual(1);
     expect(guideLines[0]?.getAttribute('stroke')).toBe('#ff00ff');
+    expect(guideLines[0]?.closest('[data-ui-overlay="true"]')).not.toBeNull();
 
     fireEvent.pointerUp(window, {
       pointerId: 11,

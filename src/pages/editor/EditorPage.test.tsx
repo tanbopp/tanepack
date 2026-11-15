@@ -751,7 +751,11 @@ describe('EditorPage', () => {
     expect(reordered.find((e) => e.id === secondText.id)?.zIndex).toBe(1);
     expect(reordered.find((e) => e.id === firstText.id)?.zIndex).toBe(2);
 
-    // Bring to Front returns secondText to 2 / 2
+    // Bring Forward moves secondText back to 2 / 2, Send to Back moves it to 1 / 2, Bring to Front returns to 2 / 2
+    fireEvent.click(screen.getByRole('button', { name: 'Bring Forward' }));
+    expect(screen.getByTestId('selected-element-layer-position').textContent).toBe('2 / 2');
+    fireEvent.click(screen.getByRole('button', { name: 'Send to Back' }));
+    expect(screen.getByTestId('selected-element-layer-position').textContent).toBe('1 / 2');
     fireEvent.click(screen.getByRole('button', { name: 'Bring to Front' }));
     expect(screen.getByTestId('selected-element-layer-position').textContent).toBe('2 / 2');
 
