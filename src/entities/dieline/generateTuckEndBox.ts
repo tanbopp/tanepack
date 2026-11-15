@@ -8,21 +8,8 @@ import {
   pt,
   rectPath,
   roundMm,
+  validateDimensions,
 } from './geometry.ts';
-
-function validateDimensions(dimensions: Dieline['dimensions']): void {
-  const { length, width, height, thickness, bleedSize } = dimensions;
-  const values = [length, width, height, thickness, bleedSize];
-  if (values.some((v) => !Number.isFinite(v))) {
-    throw new RangeError('All dieline dimensions must be finite numbers.');
-  }
-  if (length <= 0 || width <= 0 || height <= 0) {
-    throw new RangeError('Box length, width, and height must be strictly positive.');
-  }
-  if (thickness < 0 || bleedSize < 0) {
-    throw new RangeError('Paperboard thickness and bleedSize must be non-negative.');
-  }
-}
 
 /**
  * Generates a complete 11-face reverse tuck-end carton dieline in ISO millimeters.

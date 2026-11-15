@@ -6,7 +6,7 @@ import { Canvas, useThree } from '@react-three/fiber';
 import { memo, useEffect, useMemo } from 'react';
 import * as THREE from 'three';
 import type { DesignElement } from '@entities/design-document';
-import { generateTuckEndBox } from '@entities/dieline';
+import { type DielineArchetype, generateDieline } from '@entities/dieline';
 import type { Dieline } from '@entities/dieline/types';
 import {
   bakeFaceTexture,
@@ -16,6 +16,7 @@ import {
 } from './bakeTexture';
 import {
   buildBoxGeometry,
+  computeNodeTargetAngleDeg,
   createRadialShadowTexture,
   DIELINE_SCALE_TO_3D,
   type KinematicBoxModel,
@@ -35,6 +36,7 @@ const EMPTY_ELEMENTS: readonly DesignElement[] = [];
 
 export interface BoxViewerProps {
   dieline?: Dieline | undefined;
+  archetype?: DielineArchetype | undefined;
   dimensions?: Dieline['dimensions'] | undefined;
   elements?: readonly DesignElement[] | undefined;
   foldAngle?: number | undefined;
@@ -46,30 +48,39 @@ interface FaceMaterialEntry {
   texture: THREE.CanvasTexture | null;
   outerMaterial: THREE.MeshStandardMaterial;
   innerMaterial: THREE.MeshStandardMaterial;
+  overlapMaterial: THREE.MeshStandardMaterial;
+}
+
+function createStandardPaperMaterial(polygonOffsetFactor: number): THREE.MeshStandardMaterial {
+  return new THREE.MeshStandardMaterial({
+    color: '#ffffff',
+    roughness: 0.72,
+    metalness: 0.02,
+    side: THREE.DoubleSide,
+    polygonOffset: polygonOffsetFactor !== 0,
+    polygonOffsetFactor,
+    polygonOffsetUnits: polygonOffsetFactor,
+  });
 }
 
 function createFaceMaterialEntry(): FaceMaterialEntry {
-  const outerMaterial = new THREE.MeshStandardMaterial({
-    color: '#ffffff',
-    roughness: 0.72,
-    metalness: 0.02,
-    side: THREE.DoubleSide,
-  });
-  const innerMaterial = new THREE.MeshStandardMaterial({
-    color: '#ffffff',
-    roughness: 0.72,
-    metalness: 0.02,
-    side: THREE.DoubleSide,
-    polygonOffset: true,
-    polygonOffsetFactor: 1,
-    polygonOffsetUnits: 1,
-  });
   return {
     signature: null,
     texture: null,
-    outerMaterial,
-    innerMaterial,
+    outerMaterial: createStandardPaperMaterial(0),
+    innerMaterial: createStandardPaperMaterial(2),
+    overlapMaterial: createStandardPaperMaterial(-2),
   };
+}
+
+function resolveLayerMaterial(entry: FaceMaterialEntry, part: KinematicFacePart) {
+  if (part.layerOrder >= 2) {
+    return entry.overlapMaterial;
+  }
+  if (part.layerOrder === 0 || part.isInnerLayer) {
+    return entry.innerMaterial;
+  }
+  return entry.outerMaterial;
 }
 
 interface BakedFaceMeshProps {
@@ -88,7 +99,7 @@ const BakedFaceMesh = memo(function BakedFaceMesh({
       <mesh
         name={`face-${part.faceId}`}
         geometry={part.geometry}
-        material={part.isInnerLayer ? entry.innerMaterial : entry.outerMaterial}
+        material={resolveLayerMaterial(entry, part)}
       />
       <lineSegments geometry={part.edgeGeometry} material={edgeMaterial} />
     </group>
@@ -110,26 +121,29 @@ function KinematicGroupMesh({
   fallbackEntry,
   edgeMaterial,
 }: KinematicGroupMeshProps) {
-  const [minDeg, maxDeg] = node.animatedAngleRange;
-  const clampedDeg = Math.min(maxDeg, Math.max(minDeg, foldAngle));
-  const angleRad = THREE.MathUtils.degToRad(clampedDeg) * node.rotationSign;
+  const { targetDeg, progress } = computeNodeTargetAngleDeg(node, foldAngle);
+  const angleRad = THREE.MathUtils.degToRad(targetDeg) * node.rotationSign;
 
   const rotation: [number, number, number] = [
     node.rotationAxis === 'x' ? angleRad : 0,
     0,
     node.rotationAxis === 'z' ? angleRad : 0,
   ];
+  // Step layered flaps along local -Y (box outward normal when folded) as hinge closes
+  const layerOffsetY = -node.layerOffsetWorld * progress;
 
   return (
     <group name={node.id} position={node.position} rotation={rotation}>
-      {node.faces.map((face) => (
-        <BakedFaceMesh
-          key={face.faceId}
-          part={face}
-          entry={faceMaterials.get(face.sourceFaceId) ?? fallbackEntry}
-          edgeMaterial={edgeMaterial}
-        />
-      ))}
+      <group position={[0, layerOffsetY, 0]}>
+        {node.faces.map((face) => (
+          <BakedFaceMesh
+            key={face.faceId}
+            part={face}
+            entry={faceMaterials.get(face.sourceFaceId) ?? fallbackEntry}
+            edgeMaterial={edgeMaterial}
+          />
+        ))}
+      </group>
       {node.children.map((child) => (
         <KinematicGroupMesh
           key={child.id}
@@ -200,11 +214,14 @@ function CartonAssembly({
         entry.signature = null;
         entry.outerMaterial.map = null;
         entry.innerMaterial.map = null;
+        entry.overlapMaterial.map = null;
         entry.outerMaterial.dispose();
         entry.innerMaterial.dispose();
+        entry.overlapMaterial.dispose();
       }
       fallbackEntry.outerMaterial.dispose();
       fallbackEntry.innerMaterial.dispose();
+      fallbackEntry.overlapMaterial.dispose();
     };
   }, [faceMaterials, fallbackEntry]);
 
@@ -243,6 +260,8 @@ function CartonAssembly({
       entry.outerMaterial.needsUpdate = true;
       entry.innerMaterial.map = createdTexture;
       entry.innerMaterial.needsUpdate = true;
+      entry.overlapMaterial.map = createdTexture;
+      entry.overlapMaterial.needsUpdate = true;
       dirty = true;
     }
 
@@ -250,6 +269,23 @@ function CartonAssembly({
       invalidate();
     }
   }, [dieline, elements, faceMaterials, invalidate]);
+
+  // Adjust Orbit camera smoothly when switching between compact retail cartons and large shipping cartons
+  const maxBoxDim = Math.max(
+    dieline.dimensions.length,
+    dieline.dimensions.width,
+    dieline.dimensions.height,
+  );
+  useEffect(() => {
+    const camPos = (camera as { position?: { set?: (x: number, y: number, z: number) => void } })
+      ?.position;
+    if (typeof camPos?.set !== 'function') {
+      return;
+    }
+    const scale = Math.max(1, maxBoxDim / 140);
+    camPos.set(2.6 * scale, 2.8 * scale, 4.1 * scale);
+    invalidate();
+  }, [camera, invalidate, maxBoxDim]);
 
   useEffect(() => {
     invalidate();
@@ -270,6 +306,7 @@ function CartonAssembly({
 
 export function BoxViewer({
   dieline: dielineProp,
+  archetype = 'tuck-end',
   dimensions = DEFAULT_3D_DIMENSIONS,
   elements = EMPTY_ELEMENTS,
   foldAngle = 0,
@@ -278,7 +315,7 @@ export function BoxViewer({
   const dieline = useMemo(
     () =>
       dielineProp ??
-      generateTuckEndBox({
+      generateDieline(archetype, {
         length: dimensions.length,
         width: dimensions.width,
         height: dimensions.height,
@@ -286,6 +323,7 @@ export function BoxViewer({
         bleedSize: dimensions.bleedSize,
       }),
     [
+      archetype,
       dielineProp,
       dimensions.bleedSize,
       dimensions.height,
@@ -347,7 +385,7 @@ export function BoxViewer({
         dpr={[1, 1.5]}
         shadows={false}
         gl={{ antialias: false, powerPreference: 'default', preserveDrawingBuffer: true }}
-        camera={{ position: [2.6, 2.8, 4.1], fov: 40, near: 0.05, far: 150 }}
+        camera={{ position: [2.6, 2.8, 4.1], fov: 40, near: 0.05, far: 200 }}
       >
         <color attach="background" args={['#f3ece3']} />
 
@@ -356,7 +394,7 @@ export function BoxViewer({
         <directionalLight position={[3.5, 6, 4.5]} intensity={1.15} />
 
         {/* Subtle floor grid and radial gradient fake contact shadow */}
-        <gridHelper args={[16, 32, '#c3b7a9', '#e2d9ce']} position={[0, -0.004, 0]} />
+        <gridHelper args={[24, 48, '#c3b7a9', '#e2d9ce']} position={[0, -0.004, 0]} />
         <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.002, 0]}>
           <planeGeometry args={[shadowWidth, shadowDepth]} />
           <meshBasicMaterial map={shadowTexture} transparent depthWrite={false} />
@@ -380,7 +418,7 @@ export function BoxViewer({
           enableRotate
           enableDamping={false}
           minDistance={0.8}
-          maxDistance={24}
+          maxDistance={40}
           maxPolarAngle={Math.PI * 0.49}
         />
       </Canvas>

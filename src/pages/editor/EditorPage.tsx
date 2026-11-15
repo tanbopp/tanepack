@@ -42,6 +42,7 @@ import {
   useEditorStore,
 } from '@features/editor-stage';
 import { DEFAULT_PROJECT_NAME } from '@entities/design-document';
+import { DIELINE_ARCHETYPE_OPTIONS, type DielineArchetype } from '@entities/dieline';
 import { type Template, TEMPLATES } from '@entities/template';
 import { exportDielinePdf } from '@shared/lib/exportPdf';
 import { triggerPngDataUrlDownload } from '@shared/lib/exportPng';
@@ -69,7 +70,8 @@ const TEXT_COMMIT_DEBOUNCE_MS = 350;
 const DIMENSION_COMMIT_DEBOUNCE_MS = 300;
 
 type BoxDimensionAxis = 'length' | 'width' | 'height';
-type BoxPresetId = 'small' | 'standard' | 'large';
+type BoxPresetId =
+  'small' | 'standard' | 'large' | 'shipping-small' | 'shipping-medium' | 'shipping-large';
 
 interface BoxDimensionPreset {
   id: BoxPresetId;
@@ -90,6 +92,27 @@ const BOX_DIMENSION_PRESETS: readonly BoxDimensionPreset[] = [
   { id: 'small', label: 'Small Box: 50x50x50', length: 50, width: 50, height: 50 },
   { id: 'standard', label: 'Standard: 100x50x100', length: 100, width: 50, height: 100 },
   { id: 'large', label: 'Large: 200x150x100', length: 200, width: 150, height: 100 },
+  {
+    id: 'shipping-small',
+    label: 'Shipping Small: 300x200x150',
+    length: 300,
+    width: 200,
+    height: 150,
+  },
+  {
+    id: 'shipping-medium',
+    label: 'Shipping Medium: 400x300x250',
+    length: 400,
+    width: 300,
+    height: 250,
+  },
+  {
+    id: 'shipping-large',
+    label: 'Shipping Large: 600x400x300',
+    length: 600,
+    width: 400,
+    height: 300,
+  },
 ];
 
 const SAVE_STATUS_DISPLAY: Record<
@@ -148,6 +171,7 @@ export default function EditorPage() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const capture3dPngRef = useRef<(() => string | null) | null>(null);
 
+  const archetype = useEditorStore((state) => state.archetype);
   const dieline = useEditorStore((state) => state.dieline);
   const dimensions = useEditorStore((state) => state.dimensions);
   const elements = useEditorStore((state) => state.elements);
@@ -160,11 +184,12 @@ export default function EditorPage() {
   const removeElement = useEditorStore((state) => state.removeElement);
   const commitElements = useEditorStore((state) => state.commitElements);
   const setFoldAngle = useEditorStore((state) => state.setFoldAngle);
+  const setArchetype = useEditorStore((state) => state.setArchetype);
   const setDimensions = useEditorStore((state) => state.setDimensions);
   const applyTemplate = useEditorStore((state) => state.applyTemplate);
   const resetEditorStore = useEditorStore((state) => state.reset);
 
-  const storeDimensionsKey = `${dimensions.length}|${dimensions.width}|${dimensions.height}`;
+  const storeDimensionsKey = `${archetype}|${dimensions.length}|${dimensions.width}|${dimensions.height}`;
   const activeDimensionDraft =
     dimensionDraft && dimensionDraft.sourceKey === storeDimensionsKey ? dimensionDraft : null;
   const lengthInputValue = activeDimensionDraft
@@ -296,6 +321,13 @@ export default function EditorPage() {
     pendingDimensionDraftRef.current = null;
     setDimensionDraft(null);
     setDimensions(selectedPreset.length, selectedPreset.width, selectedPreset.height);
+  };
+
+  const handleArchetypeChange = (event: SelectChangeEvent<DielineArchetype>) => {
+    clearDimensionTimer();
+    pendingDimensionDraftRef.current = null;
+    setDimensionDraft(null);
+    setArchetype(event.target.value as DielineArchetype);
   };
 
   const handleRegister3dCapture = useCallback((captureFn: (() => string | null) | null) => {
@@ -1500,6 +1532,27 @@ export default function EditorPage() {
                   {dimensions.length} × {dimensions.width} × {dimensions.height} mm
                 </Typography>
               </Box>
+
+              <FormControl size="small" fullWidth>
+                <InputLabel id="box-type-select-label">Box Type</InputLabel>
+                <Select<DielineArchetype>
+                  labelId="box-type-select-label"
+                  id="box-type-select"
+                  label="Box Type"
+                  value={archetype}
+                  onChange={handleArchetypeChange}
+                  sx={{
+                    borderRadius: '12px',
+                    backgroundColor: 'var(--md-sys-color-surface-container-highest)',
+                  }}
+                >
+                  {DIELINE_ARCHETYPE_OPTIONS.map((option) => (
+                    <MenuItem key={option.id} value={option.id}>
+                      {option.label}
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
 
               <FormControl size="small" fullWidth>
                 <InputLabel id="box-preset-select-label">Preset</InputLabel>

@@ -18,7 +18,8 @@ import {
 } from '@entities/design-document';
 import {
   computeSvgPathBoundsMm,
-  generateTuckEndBox,
+  type DielineArchetype,
+  generateDieline,
   type SvgPathBoundsMm,
 } from '@entities/dieline';
 import type { Dieline, Point } from '@entities/dieline/types';
@@ -61,6 +62,7 @@ const CORNER_CURSORS: Record<ResizeCorner, string> = {
 };
 
 export interface DielineStageProps {
+  archetype?: DielineArchetype | undefined;
   dimensions?: Dieline['dimensions'] | undefined;
   isActive?: boolean | undefined;
 }
@@ -227,7 +229,11 @@ function SelectionTransformOverlay({
   );
 }
 
-export function DielineStage({ dimensions, isActive = true }: DielineStageProps) {
+export function DielineStage({
+  archetype = 'tuck-end',
+  dimensions,
+  isActive = true,
+}: DielineStageProps) {
   const stageRef = useRef<HTMLDivElement | null>(null);
   const hasAutoFittedRef = useRef(false);
   const lastAutoFittedSizeRef = useRef<{ totalWidth: number; totalHeight: number } | null>(null);
@@ -255,8 +261,8 @@ export function DielineStage({ dimensions, isActive = true }: DielineStageProps)
   }, [viewport]);
 
   const dieline = useMemo(
-    () => (dimensions ? generateTuckEndBox(dimensions) : storeDieline),
-    [dimensions, storeDieline],
+    () => (dimensions ? generateDieline(archetype, dimensions) : storeDieline),
+    [archetype, dimensions, storeDieline],
   );
 
   const faceBoundsMap = useMemo(() => {

@@ -195,6 +195,7 @@ export function useProjectPersistence(): ProjectPersistenceState {
     };
 
     useEditorStore.setState({
+      archetype: loaded.dieline.archetype ?? 'tuck-end',
       dieline: loaded.dieline,
       dimensions: loaded.dieline.dimensions,
       elements: outsideElements,

@@ -2,6 +2,7 @@
 import type { DesignElement, ShapeElement, TextElement } from '@entities/design-document';
 import {
   computeSvgPathBoundsMm,
+  type DielineArchetype,
   generateTuckEndBox,
   roundMm,
   type SvgPathBoundsMm,
@@ -17,6 +18,7 @@ export interface Template {
   id: string;
   name: string;
   description: string;
+  archetype?: DielineArchetype | undefined;
   dimensions: TemplateDimensions;
   elements: DesignElement[];
   thumbnailColor: string;

@@ -9,7 +9,8 @@ import type {
 import {
   computeSvgPathBoundsMm,
   type Dieline,
-  generateTuckEndBox,
+  type DielineArchetype,
+  generateDieline,
   roundMm,
   type SvgPathBoundsMm,
 } from '@entities/dieline';
@@ -68,6 +69,7 @@ export interface ElementPatch {
 export type TextElementPatch = ElementPatch;
 
 export interface EditorStageStoreState {
+  archetype: DielineArchetype;
   dieline: Dieline;
   dimensions: Dieline['dimensions'];
   elements: DesignElement[];
@@ -81,14 +83,32 @@ export interface EditorStageStoreState {
   selectElement: (id: string | null) => void;
   commitElements: () => void;
   setFoldAngle: (angle: number) => void;
+  setArchetype: (archetype: DielineArchetype) => void;
   setDimensions: (length: number, width: number, height: number) => void;
   applyTemplate: (template: Template) => void;
   reset: () => void;
 }
 
-function createInitialDieline(): Dieline {
-  return generateTuckEndBox(DEFAULT_DIELINE_DIMENSIONS);
+function createInitialDieline(archetype: DielineArchetype = 'tuck-end'): Dieline {
+  return generateDieline(archetype, DEFAULT_DIELINE_DIMENSIONS);
 }
+
+const ARCHETYPE_FACE_FALLBACKS: Readonly<Record<string, string>> = {
+  'top-tuck': 'top-flap-back',
+  'bottom-tuck': 'bottom-flap-front',
+  'top-dust-left': 'top-flap-left',
+  'top-dust-right': 'top-flap-right',
+  'bottom-dust-left': 'bottom-flap-left',
+  'bottom-dust-right': 'bottom-flap-right',
+  'top-flap-back': 'top-tuck',
+  'bottom-flap-front': 'bottom-tuck',
+  'top-flap-front': 'top-tuck',
+  'bottom-flap-back': 'bottom-tuck',
+  'top-flap-left': 'top-dust-left',
+  'top-flap-right': 'top-dust-right',
+  'bottom-flap-left': 'bottom-dust-left',
+  'bottom-flap-right': 'bottom-dust-right',
+};
 
 function resolveFaceBounds(dieline: Dieline, targetFaceId: string) {
   const face = dieline.faces.find((candidate) => candidate.id === targetFaceId) ?? dieline.faces[0];
@@ -138,6 +158,7 @@ function cloneElementWithFreshId(element: DesignElement): DesignElement {
 }
 
 function regenerateDielineForSize(
+  archetype: DielineArchetype,
   current: Dieline['dimensions'],
   length: number,
   width: number,
@@ -153,7 +174,7 @@ function regenerateDielineForSize(
     nextHeight === current.height
   ) {
     return {
-      dieline: createInitialDieline(),
+      dieline: generateDieline(archetype, current),
       dimensions: current,
       changed: false,
     };
@@ -166,12 +187,63 @@ function regenerateDielineForSize(
     thickness: current.thickness,
     bleedSize: current.bleedSize,
   };
-  const nextDieline = generateTuckEndBox(nextDimensions);
+  const nextDieline = generateDieline(archetype, nextDimensions);
   return {
     dieline: nextDieline,
     dimensions: nextDieline.dimensions,
     changed: true,
   };
+}
+
+function reconcileElementsForDieline(
+  nextDieline: Dieline,
+  items: DesignElement[],
+): DesignElement[] {
+  const boundsByFaceId = new Map<string, SvgPathBoundsMm>();
+  for (const face of nextDieline.faces) {
+    boundsByFaceId.set(face.id, computeSvgPathBoundsMm(face.path));
+  }
+
+  let changed = false;
+  const reconciled = items.map((element) => {
+    let targetFaceId = element.faceId;
+    if (!boundsByFaceId.has(targetFaceId)) {
+      const mapped = ARCHETYPE_FACE_FALLBACKS[targetFaceId];
+      targetFaceId = mapped && boundsByFaceId.has(mapped) ? mapped : 'front';
+    }
+
+    const faceBounds = boundsByFaceId.get(targetFaceId);
+    if (!faceBounds) {
+      return element;
+    }
+
+    const nextPos = clampElementPositionToFace(
+      element,
+      element.transform.x,
+      element.transform.y,
+      faceBounds,
+    );
+    if (
+      targetFaceId === element.faceId &&
+      nextPos.x === element.transform.x &&
+      nextPos.y === element.transform.y
+    ) {
+      return element;
+    }
+
+    changed = true;
+    return {
+      ...element,
+      faceId: targetFaceId,
+      transform: {
+        ...element.transform,
+        x: nextPos.x,
+        y: nextPos.y,
+      },
+    };
+  });
+
+  return changed ? reconciled : items;
 }
 
 function patchElement(element: DesignElement, patch: ElementPatch): DesignElement {
@@ -208,7 +280,8 @@ function patchElement(element: DesignElement, patch: ElementPatch): DesignElemen
 }
 
 export const useEditorStore = create<EditorStageStoreState>((set) => ({
-  dieline: createInitialDieline(),
+  archetype: 'tuck-end',
+  dieline: createInitialDieline('tuck-end'),
   dimensions: { ...DEFAULT_DIELINE_DIMENSIONS },
   elements: [],
   committedElements: [],
@@ -353,53 +426,47 @@ export const useEditorStore = create<EditorStageStoreState>((set) => ({
       foldAngle: Math.min(90, Math.max(0, Number.isFinite(angle) ? angle : 0)),
     }),
 
+  setArchetype: (archetype) =>
+    set((state) => {
+      if (state.archetype === archetype && state.dieline.archetype === archetype) {
+        return state;
+      }
+
+      const nextDieline = generateDieline(archetype, state.dimensions);
+      const nextElements = reconcileElementsForDieline(nextDieline, state.elements);
+      const nextCommittedElements =
+        state.committedElements === state.elements
+          ? nextElements
+          : reconcileElementsForDieline(nextDieline, state.committedElements);
+
+      return {
+        archetype,
+        dieline: nextDieline,
+        dimensions: nextDieline.dimensions,
+        elements: nextElements,
+        committedElements: nextCommittedElements,
+      };
+    }),
+
   setDimensions: (length, width, height) =>
     set((state) => {
-      const regenerated = regenerateDielineForSize(state.dimensions, length, width, height);
+      const regenerated = regenerateDielineForSize(
+        state.archetype,
+        state.dimensions,
+        length,
+        width,
+        height,
+      );
       if (!regenerated.changed) {
         return state;
       }
 
       const { dieline: nextDieline } = regenerated;
-      const boundsByFaceId = new Map<string, SvgPathBoundsMm>();
-      for (const face of nextDieline.faces) {
-        boundsByFaceId.set(face.id, computeSvgPathBoundsMm(face.path));
-      }
-
-      const clampListToDieline = (items: DesignElement[]): DesignElement[] => {
-        let changed = false;
-        const clamped = items.map((element) => {
-          const faceBounds = boundsByFaceId.get(element.faceId);
-          if (!faceBounds) {
-            return element;
-          }
-          const nextPos = clampElementPositionToFace(
-            element,
-            element.transform.x,
-            element.transform.y,
-            faceBounds,
-          );
-          if (nextPos.x === element.transform.x && nextPos.y === element.transform.y) {
-            return element;
-          }
-          changed = true;
-          return {
-            ...element,
-            transform: {
-              ...element.transform,
-              x: nextPos.x,
-              y: nextPos.y,
-            },
-          };
-        });
-        return changed ? clamped : items;
-      };
-
-      const nextElements = clampListToDieline(state.elements);
+      const nextElements = reconcileElementsForDieline(nextDieline, state.elements);
       const nextCommittedElements =
         state.committedElements === state.elements
           ? nextElements
-          : clampListToDieline(state.committedElements);
+          : reconcileElementsForDieline(nextDieline, state.committedElements);
 
       return {
         dieline: nextDieline,
@@ -411,17 +478,25 @@ export const useEditorStore = create<EditorStageStoreState>((set) => ({
 
   applyTemplate: (template) =>
     set((state) => {
+      const targetArchetype = template.archetype ?? 'tuck-end';
       const regenerated = regenerateDielineForSize(
+        targetArchetype,
         state.dimensions,
         template.dimensions.length,
         template.dimensions.width,
         template.dimensions.height,
       );
+      const archetypeChanged = targetArchetype !== state.archetype;
+      const nextDieline =
+        regenerated.changed || archetypeChanged ? regenerated.dieline : state.dieline;
+      const nextDimensions =
+        regenerated.changed || archetypeChanged ? regenerated.dimensions : state.dimensions;
       const nextElements = template.elements.map(cloneElementWithFreshId);
 
       return {
-        dieline: regenerated.changed ? regenerated.dieline : state.dieline,
-        dimensions: regenerated.changed ? regenerated.dimensions : state.dimensions,
+        archetype: targetArchetype,
+        dieline: nextDieline,
+        dimensions: nextDimensions,
         elements: nextElements,
         committedElements: nextElements,
         selectedElementId: null,
@@ -430,7 +505,8 @@ export const useEditorStore = create<EditorStageStoreState>((set) => ({
 
   reset: () =>
     set({
-      dieline: createInitialDieline(),
+      archetype: 'tuck-end',
+      dieline: createInitialDieline('tuck-end'),
       dimensions: { ...DEFAULT_DIELINE_DIMENSIONS },
       elements: [],
       committedElements: [],

@@ -171,4 +171,33 @@ describe('useEditorStore', () => {
     const secondIds = useEditorStore.getState().elements.map((el) => el.id);
     expect(secondIds.some((id) => firstIds.includes(id))).toBe(false);
   });
+
+  it('switches archetypes via setArchetype, preserves front artwork, and keeps archetype across setDimensions', () => {
+    const onFront = useEditorStore.getState().addElement({ content: 'Fragile' });
+    const onTuck = useEditorStore.getState().addElement({ faceId: 'top-tuck', content: 'Lid' });
+
+    useEditorStore.getState().setArchetype('fefco-0201');
+    const rscState = useEditorStore.getState();
+    expect(rscState.archetype).toBe('fefco-0201');
+    expect(rscState.dieline.archetype).toBe('fefco-0201');
+    expect(rscState.dieline.faces).toHaveLength(13);
+
+    // Front artwork stays on front; Tuck flap element cleanly maps onto Back top flap
+    expect(rscState.elements.find((e) => e.id === onFront.id)?.faceId).toBe('front');
+    expect(rscState.elements.find((e) => e.id === onTuck.id)?.faceId).toBe('top-flap-back');
+
+    // Resizing keeps active FEFCO 0201 archetype instead of reverting to tuck-end
+    useEditorStore.getState().setDimensions(300, 200, 150);
+    const resizedRsc = useEditorStore.getState();
+    expect(resizedRsc.archetype).toBe('fefco-0201');
+    expect(resizedRsc.dieline.archetype).toBe('fefco-0201');
+    expect(resizedRsc.dieline.totalWidth).toBe(1037);
+    expect(resizedRsc.dieline.totalHeight).toBe(351);
+
+    // Switching to FEFCO 0203 doubles outer flap height across the 200.5mm opening
+    useEditorStore.getState().setArchetype('fefco-0203');
+    const foscState = useEditorStore.getState();
+    expect(foscState.archetype).toBe('fefco-0203');
+    expect(foscState.dieline.totalHeight).toBe(551.5);
+  });
 });

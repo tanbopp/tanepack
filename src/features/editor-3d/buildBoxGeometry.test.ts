@@ -1,9 +1,10 @@
 // Unit tests for procedural 3D shape conversion and forward-kinematics box folding
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
-import { generateTuckEndBox } from '@entities/dieline';
+import { generateFefco0203, generateRsc, generateTuckEndBox } from '@entities/dieline';
 import {
   buildBoxGeometry,
+  computeNodeTargetAngleDeg,
   createRadialShadowTexture,
   DIELINE_SCALE_TO_3D,
   type KinematicBoxNode,
@@ -29,20 +30,22 @@ function computeFaceWorldBounds(
     group.name = node.id;
     group.position.set(node.position[0], node.position[1], node.position[2]);
 
-    const [minDeg, maxDeg] = node.animatedAngleRange;
-    const clampedDeg = Math.min(maxDeg, Math.max(minDeg, foldAngleDeg));
-    const rad = THREE.MathUtils.degToRad(clampedDeg) * node.rotationSign;
+    const { targetDeg, progress } = computeNodeTargetAngleDeg(node, foldAngleDeg);
+    const rad = THREE.MathUtils.degToRad(targetDeg) * node.rotationSign;
     if (node.rotationAxis === 'x') {
       group.rotation.x = rad;
     } else if (node.rotationAxis === 'z') {
       group.rotation.z = rad;
     }
 
+    const layerGroup = new THREE.Group();
+    layerGroup.position.set(0, -node.layerOffsetWorld * progress, 0);
     for (const face of node.faces) {
       const mesh = new THREE.Mesh(face.geometry);
       mesh.name = face.faceId;
-      group.add(mesh);
+      layerGroup.add(mesh);
     }
+    group.add(layerGroup);
 
     for (const child of node.children) {
       group.add(buildSceneGroup(child));
@@ -313,5 +316,66 @@ describe('buildBoxGeometry', () => {
     foldedLarge.get('right')!.getSize(largeRightSize);
     expect(largeRightSize.y).toBeCloseTo(150.5 * DIELINE_SCALE_TO_3D, 3);
     largeModel.dispose();
+  });
+
+  it('folds FEFCO 0201 side inner flaps underneath center-meeting outer flaps cleanly', () => {
+    const rsc = generateRsc({
+      length: 300,
+      width: 200,
+      height: 150,
+      thickness: 0.5,
+      bleedSize: 3,
+    });
+    const model = buildBoxGeometry(rsc);
+
+    // At 70°, side inner flaps reach 90° closed before Front/Back outer flaps finish closing
+    const midBounds = computeFaceWorldBounds(model.root, 70);
+    expect(midBounds.get('top-flap-left')!.min.z).toBeCloseTo(-0.7525, 3);
+    expect(midBounds.get('top-flap-left')!.max.z).toBeCloseTo(-0.7525, 3);
+    expect(midBounds.get('top-flap-front')!.min.z).toBeLessThan(-0.76);
+
+    // At 90°, Back & Front top outer flaps meet seamlessly in middle at y ≈ +1.0025 over side inner flaps
+    const closedBounds = computeFaceWorldBounds(model.root, 90);
+    const frontTop = closedBounds.get('top-flap-front')!;
+    const backTop = closedBounds.get('top-flap-back')!;
+    const leftInner = closedBounds.get('top-flap-left')!;
+
+    expect(frontTop.max.y).toBeCloseTo(backTop.min.y, 4);
+    expect(frontTop.min.z).toBeLessThan(leftInner.min.z);
+
+    model.dispose();
+  });
+
+  it('folds FEFCO 0203 outer flaps into full overlap with distinct Z offset separation', () => {
+    const fosc = generateFefco0203({
+      length: 300,
+      width: 200,
+      height: 150,
+      thickness: 0.5,
+      bleedSize: 3,
+    });
+    const model = buildBoxGeometry(fosc);
+    const closedBounds = computeFaceWorldBounds(model.root, 90);
+
+    const topLeftInner = closedBounds.get('top-flap-left')!;
+    const topBackOuter = closedBounds.get('top-flap-back')!;
+    const topFrontOuter = closedBounds.get('top-flap-front')!;
+
+    // Both Front and Back outer flaps span the full 200.5mm Y opening (minus slot inset margin)
+    expect(topBackOuter.max.y - topBackOuter.min.y).toBeCloseTo(2.005, 3);
+    expect(topFrontOuter.max.y - topFrontOuter.min.y).toBeCloseTo(2.005, 3);
+
+    // Distinct outward Z separation (-Z top normal): frontOuter sits further outside than backOuter > inner
+    expect(topFrontOuter.min.z).toBeLessThan(topBackOuter.min.z);
+    expect(topBackOuter.min.z).toBeLessThan(topLeftInner.min.z);
+
+    // Bottom flaps overlap outward along +Z symmetrically: frontOuter (+Z) > backOuter > inner
+    const botLeftInner = closedBounds.get('bottom-flap-left')!;
+    const botBackOuter = closedBounds.get('bottom-flap-back')!;
+    const botFrontOuter = closedBounds.get('bottom-flap-front')!;
+    expect(botFrontOuter.max.z).toBeGreaterThan(botBackOuter.max.z);
+    expect(botBackOuter.max.z).toBeGreaterThan(botLeftInner.max.z);
+
+    model.dispose();
   });
 });

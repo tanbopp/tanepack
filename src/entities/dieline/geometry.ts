@@ -1,8 +1,23 @@
-// Pure millimeter geometry, SVG path formatting, and offset helpers for dielines
-import type { Point } from '@entities/dieline/types';
+// Pure millimeter geometry, validation, SVG path formatting, and offset helpers for dielines
+import type { Dieline, Point } from '@entities/dieline/types';
 import { roundMm } from '@shared/lib/units';
 
 export { roundMm };
+
+/** Validates finite positive box dimensions and non-negative thickness/bleed allowances. */
+export function validateDimensions(dimensions: Dieline['dimensions']): void {
+  const { length, width, height, thickness, bleedSize } = dimensions;
+  const values = [length, width, height, thickness, bleedSize];
+  if (values.some((v) => !Number.isFinite(v))) {
+    throw new RangeError('All dieline dimensions must be finite numbers.');
+  }
+  if (length <= 0 || width <= 0 || height <= 0) {
+    throw new RangeError('Box length, width, and height must be strictly positive.');
+  }
+  if (thickness < 0 || bleedSize < 0) {
+    throw new RangeError('Paperboard thickness and bleedSize must be non-negative.');
+  }
+}
 
 /** Formats a millimeter number to at most 2 decimal places without trailing zeros. */
 export function fmtMm(value: number): string {
@@ -380,6 +395,232 @@ export function buildOuterBleedPath(p: BleedLayoutParams): string {
   } else {
     cmds.push(`L ${pt(xJoinTopTuck, trEndA.y)}`);
   }
+  cmds.push('Z');
+
+  return cmds.join(' ');
+}
+
+export interface SlottedLayoutParams {
+  x0: number;
+  x1: number;
+  x2: number;
+  x3: number;
+  x4: number;
+  x5: number;
+  y0: number;
+  yTopInner: number;
+  yBodyTop: number;
+  yBodyBot: number;
+  yBotInner: number;
+  yMax: number;
+  flapInset: number;
+  glueTaper: number;
+  bleedSize: number;
+}
+
+/**
+ * Builds the continuous clockwise perimeter cut path for a 13-face slotted container
+ * (FEFCO 0201 RSC or FEFCO 0203 Full Overlap).
+ */
+export function buildSlottedCutPath(p: SlottedLayoutParams): string {
+  const {
+    x0,
+    x1,
+    x2,
+    x3,
+    x4,
+    x5,
+    y0,
+    yTopInner,
+    yBodyTop,
+    yBodyBot,
+    yBotInner,
+    yMax,
+    flapInset,
+    glueTaper,
+  } = p;
+
+  const topFlapY: readonly [number, number, number, number] = [yTopInner, y0, yTopInner, y0];
+  const botFlapY: readonly [number, number, number, number] = [yMax, yBotInner, yMax, yBotInner];
+  const panels: readonly [number, number][] = [
+    [x1, x2],
+    [x2, x3],
+    [x3, x4],
+    [x4, x5],
+  ];
+
+  const cmds: string[] = [`M ${pt(x1 + flapInset, yBodyTop)}`];
+
+  // Top 4 flaps left-to-right (Left inner, Front outer, Right inner, Back outer)
+  panels.forEach(([xStart, xEnd], idx) => {
+    const yEdge = topFlapY[idx] ?? y0;
+    if (idx > 0) {
+      cmds.push(`L ${pt(xStart + flapInset, yBodyTop)}`);
+    }
+    cmds.push(`L ${pt(xStart + flapInset, yEdge)}`);
+    cmds.push(`L ${pt(xEnd - flapInset, yEdge)}`);
+    cmds.push(`L ${pt(xEnd - flapInset, yBodyTop)}`);
+  });
+
+  // Back outer right edge from top slot shoulder to bottom slot shoulder
+  cmds.push(`L ${pt(x5, yBodyTop)}`);
+  cmds.push(`L ${pt(x5, yBodyBot)}`);
+
+  // Bottom 4 flaps right-to-left (Back outer, Right inner, Front outer, Left inner)
+  const botPanels = [...panels].reverse();
+  botPanels.forEach(([xStart, xEnd], idx) => {
+    const yEdge = botFlapY[idx] ?? yMax;
+    cmds.push(`L ${pt(xEnd - flapInset, yBodyBot)}`);
+    cmds.push(`L ${pt(xEnd - flapInset, yEdge)}`);
+    cmds.push(`L ${pt(xStart + flapInset, yEdge)}`);
+    cmds.push(`L ${pt(xStart + flapInset, yBodyBot)}`);
+  });
+
+  // Glue tab clockwise around left wall back into top-left hinge
+  cmds.push(`L ${pt(x1, yBodyBot)}`);
+  cmds.push(`L ${pt(x0, yBodyBot - glueTaper)}`);
+  cmds.push(`L ${pt(x0, yBodyTop + glueTaper)}`);
+  cmds.push(`L ${pt(x1, yBodyTop)}`);
+  cmds.push('Z');
+
+  return cmds.join(' ');
+}
+
+/**
+ * Builds a clean, non-self-intersecting outward bleed contour for FEFCO 0201 / 0203
+ * slotted containers, bridging narrow inter-flap slots cleanly when `flapInset < bleedSize`.
+ */
+export function buildSlottedBleedPath(p: SlottedLayoutParams): string {
+  const b = p.bleedSize;
+  const {
+    x0,
+    x1,
+    x2,
+    x3,
+    x4,
+    x5,
+    y0,
+    yTopInner,
+    yBodyTop,
+    yBodyBot,
+    yBotInner,
+    yMax,
+    flapInset,
+    glueTaper,
+  } = p;
+
+  const panels: readonly [number, number][] = [
+    [x1, x2],
+    [x2, x3],
+    [x3, x4],
+    [x4, x5],
+  ];
+  const topY: readonly [number, number, number, number] = [yTopInner, y0, yTopInner, y0];
+  const botY: readonly [number, number, number, number] = [yMax, yBotInner, yMax, yBotInner];
+
+  const cmds: string[] = [];
+
+  // Glue tab top sloped edge transitioning into Left top inner flap
+  const [glueTopA, glueTopB] = offsetSegmentOutward(
+    { x: x0, y: yBodyTop + glueTaper },
+    { x: x1, y: yBodyTop },
+    b,
+  );
+  const xFirstFlapLeft = x1 + flapInset - b;
+  const yFirstTopBleed = roundMm((topY[0] ?? y0) - b);
+
+  cmds.push(`M ${pt(x0 - b, glueTopA.y)}`);
+  cmds.push(`L ${pt(glueTopA.x, glueTopA.y)}`);
+  if (glueTopB.x < xFirstFlapLeft) {
+    cmds.push(`L ${pt(glueTopB.x, glueTopB.y)}`);
+    cmds.push(`L ${pt(xFirstFlapLeft, yBodyTop - b)}`);
+  } else {
+    cmds.push(`L ${pt(xFirstFlapLeft, Math.max(yFirstTopBleed, glueTopB.y))}`);
+  }
+
+  // Top 4 flaps left-to-right with non-intersecting slot bridges
+  panels.forEach(([xStart, xEnd], idx) => {
+    const curY = roundMm((topY[idx] ?? y0) - b);
+    const curRightBleed = xEnd - flapInset + b;
+
+    cmds.push(`L ${pt(xStart + flapInset - b, curY)}`);
+
+    if (idx < panels.length - 1) {
+      const nextY = roundMm((topY[idx + 1] ?? y0) - b);
+      const nextLeftBleed = xEnd + flapInset - b;
+
+      if (curRightBleed < nextLeftBleed) {
+        cmds.push(`L ${pt(curRightBleed, curY)}`);
+        cmds.push(`L ${pt(curRightBleed, yBodyTop - b)}`);
+        cmds.push(`L ${pt(nextLeftBleed, yBodyTop - b)}`);
+      } else if (curY === nextY) {
+        // Adjacent flaps have identical bleed height: bridge straight across slot
+        cmds.push(`L ${pt(nextLeftBleed, nextY)}`);
+      } else {
+        // Keep exact `b` clearance around the taller adjacent flap across the narrow slot
+        const stepX = curY < nextY ? curRightBleed : nextLeftBleed;
+        cmds.push(`L ${pt(stepX, curY)}`);
+        cmds.push(`L ${pt(stepX, nextY)}`);
+      }
+    } else {
+      cmds.push(`L ${pt(curRightBleed, curY)}`);
+    }
+  });
+
+  // Back top shoulder -> outer right edge (x5 + b) -> bottom shoulder
+  const xLastFlapRight = x5 - flapInset + b;
+  if (xLastFlapRight < x5 + b) {
+    cmds.push(`L ${pt(xLastFlapRight, yBodyTop - b)}`);
+    cmds.push(`L ${pt(x5 + b, yBodyTop - b)}`);
+  }
+  cmds.push(`L ${pt(x5 + b, yBodyBot + b)}`);
+  if (xLastFlapRight < x5 + b) {
+    cmds.push(`L ${pt(xLastFlapRight, yBodyBot + b)}`);
+  }
+
+  // Bottom 4 flaps right-to-left (Back outer, Right inner, Front outer, Left inner)
+  const revPanels = [...panels].reverse();
+  revPanels.forEach(([xStart, xEnd], idx) => {
+    const curY = roundMm((botY[idx] ?? yMax) + b);
+    const curLeftBleed = xStart + flapInset - b;
+
+    cmds.push(`L ${pt(xEnd - flapInset + b, curY)}`);
+
+    if (idx < revPanels.length - 1) {
+      const nextY = roundMm((botY[idx + 1] ?? yMax) + b);
+      const nextRightBleed = xStart - flapInset + b;
+
+      if (curLeftBleed > nextRightBleed) {
+        cmds.push(`L ${pt(curLeftBleed, curY)}`);
+        cmds.push(`L ${pt(curLeftBleed, yBodyBot + b)}`);
+        cmds.push(`L ${pt(nextRightBleed, yBodyBot + b)}`);
+      } else if (curY === nextY) {
+        cmds.push(`L ${pt(nextRightBleed, nextY)}`);
+      } else {
+        const stepX = curY > nextY ? curLeftBleed : nextRightBleed;
+        cmds.push(`L ${pt(stepX, curY)}`);
+        cmds.push(`L ${pt(stepX, nextY)}`);
+      }
+    } else {
+      cmds.push(`L ${pt(curLeftBleed, curY)}`);
+    }
+  });
+
+  // Transition from Bottom Left Inner flap into Glue Tab bottom slope & left edge
+  const [glueBotA, glueBotB] = offsetSegmentOutward(
+    { x: x1, y: yBodyBot },
+    { x: x0, y: yBodyBot - glueTaper },
+    b,
+  );
+  const yLastBotBleed = roundMm((botY[3] ?? yBotInner) + b);
+  if (glueBotA.x < xFirstFlapLeft) {
+    cmds.push(`L ${pt(xFirstFlapLeft, yBodyBot + b)}`);
+    cmds.push(`L ${pt(glueBotA.x, glueBotA.y)}`);
+  } else {
+    cmds.push(`L ${pt(xFirstFlapLeft, Math.min(yLastBotBleed, glueBotA.y))}`);
+  }
+  cmds.push(`L ${pt(glueBotB.x, glueBotB.y)}`);
+  cmds.push(`L ${pt(x0 - b, glueBotB.y)}`);
   cmds.push('Z');
 
   return cmds.join(' ');

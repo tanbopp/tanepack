@@ -611,4 +611,25 @@ describe('EditorPage', () => {
     expect(mockFetchProject).not.toHaveBeenCalled();
     expect(mockSaveProject).not.toHaveBeenCalled();
   });
+
+  it('switches Box Type between Tuck-End, FEFCO 0201 (RSC), and FEFCO 0203 (Full Overlap) and applies Shipping presets', async () => {
+    renderEditorPage();
+
+    // Select Shipping Small: 300x200x150 preset
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Preset' }));
+    fireEvent.click(screen.getByRole('option', { name: 'Shipping Small: 300x200x150' }));
+    expect(screen.getByTestId('box-dimensions-summary').textContent).toBe('300 × 200 × 150 mm');
+
+    // Switch Box Type to FEFCO 0201 (RSC)
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Box Type' }));
+    fireEvent.click(screen.getByRole('option', { name: 'FEFCO 0201 (RSC)' }));
+    expect(useEditorStore.getState().archetype).toBe('fefco-0201');
+    expect(screen.getByTestId('dieline-svg').getAttribute('viewBox')).toBe('0 0 1037 351');
+
+    // Switch Box Type to FEFCO 0203 (Full Overlap)
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Box Type' }));
+    fireEvent.click(screen.getByRole('option', { name: 'FEFCO 0203 (Full Overlap)' }));
+    expect(useEditorStore.getState().archetype).toBe('fefco-0203');
+    expect(screen.getByTestId('dieline-svg').getAttribute('viewBox')).toBe('0 0 1037 551.5');
+  });
 });

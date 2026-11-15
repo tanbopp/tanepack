@@ -22,6 +22,7 @@ export interface KinematicFacePart {
   edgeGeometry: THREE.BufferGeometry;
   boundsMm: FaceBoundsMm;
   isInnerLayer: boolean;
+  layerOrder: number;
 }
 
 export interface KinematicBoxNode {
@@ -32,8 +33,34 @@ export interface KinematicBoxNode {
   rotationAxis: FoldRotationAxis | null;
   rotationSign: 1 | -1;
   animatedAngleRange: [number, number];
+  foldStage: [number, number];
+  layerOrder: number | null;
+  layerOffsetWorld: number;
   faces: KinematicFacePart[];
   children: KinematicBoxNode[];
+}
+
+/** Computes the staged target angle in degrees and normalized stage progress [0, 1] for a kinematic fold node. */
+export function computeNodeTargetAngleDeg(
+  node: Pick<KinematicBoxNode, 'animatedAngleRange' | 'foldStage'>,
+  foldAngle: number,
+): { targetDeg: number; progress: number } {
+  const [minDeg, maxDeg] = node.animatedAngleRange;
+  const [stageStart, stageEnd] = node.foldStage;
+  const stageSpan = stageEnd - stageStart;
+
+  if (stageSpan <= 1e-6) {
+    const targetDeg = Math.min(maxDeg, Math.max(minDeg, foldAngle));
+    const angleSpan = maxDeg - minDeg;
+    return {
+      targetDeg,
+      progress: angleSpan > 1e-6 ? Math.min(1, Math.max(0, (targetDeg - minDeg) / angleSpan)) : 0,
+    };
+  }
+
+  const progress = Math.min(1, Math.max(0, (foldAngle - stageStart) / stageSpan));
+  const targetDeg = minDeg + (maxDeg - minDeg) * progress;
+  return { targetDeg, progress };
 }
 
 export interface KinematicBoxModel {
@@ -325,7 +352,7 @@ function buildGeometryPartFromShape(
   boundsMm: FaceBoundsMm,
   pivotMm: Point,
   uvBoundsMm: FaceBoundsMm,
-  isInnerLayer: boolean,
+  layerOrder: number,
 ): KinematicFacePart {
   const geometry = new THREE.ShapeGeometry(shape, 8);
   geometry.rotateX(-Math.PI / 2);
@@ -342,13 +369,20 @@ function buildGeometryPartFromShape(
     geometry,
     edgeGeometry,
     boundsMm,
-    isInnerLayer,
+    isInnerLayer: layerOrder === 0,
+    layerOrder,
   };
 }
 
-function createFaceGeometryPart(face: Face, pivotMm: Point): KinematicFacePart {
+function createFaceGeometryPart(
+  face: Face,
+  pivotMm: Point,
+  explicitLayerOrder?: number,
+): KinematicFacePart {
   const { shape, boundsMm } = parseSvgPathToShape(face.path, pivotMm);
-  const isInnerLayer = face.id === 'glue-tab' || face.id.includes('dust');
+  const defaultInner =
+    face.id === 'glue-tab' || face.id.includes('dust') || face.id.includes('inner');
+  const layerOrder = explicitLayerOrder ?? (defaultInner ? 0 : 1);
   return buildGeometryPartFromShape(
     face.id,
     face.id,
@@ -357,7 +391,7 @@ function createFaceGeometryPart(face: Face, pivotMm: Point): KinematicFacePart {
     boundsMm,
     pivotMm,
     boundsMm,
-    isInnerLayer,
+    layerOrder,
   );
 }
 
@@ -491,6 +525,7 @@ export function buildBoxGeometry(dieline: Dieline): KinematicBoxModel {
 
   const groupMap = new Map<string, FoldGroup>(dieline.foldGroups.map((g) => [g.id, g]));
   const createdParts: KinematicFacePart[] = [];
+  const thicknessStepWorld = Math.max(0.5, dieline.dimensions.thickness) * DIELINE_SCALE_TO_3D;
 
   const buildNode = (groupId: string, parentPivotMm: Point): KinematicBoxNode => {
     const group = groupMap.get(groupId);
@@ -524,6 +559,11 @@ export function buildBoxGeometry(dieline: Dieline): KinematicBoxModel {
     const directFaceIds = group.faceIds.filter((faceId) => !childCoveredFaceIds.has(faceId));
     const directFaces: KinematicFacePart[] = [];
     const extraChildren: KinematicBoxNode[] = [];
+
+    const foldStage: [number, number] = group.foldStage ?? [0, 90];
+    const layerOrder = group.layerOrder ?? null;
+    const layerOffsetWorld =
+      layerOrder !== null && layerOrder > 0 ? layerOrder * thicknessStepWorld : 0;
 
     for (const faceId of directFaceIds) {
       const face = faceMap.get(faceId);
@@ -563,7 +603,7 @@ export function buildBoxGeometry(dieline: Dieline): KinematicBoxModel {
             lidShapeData.boundsMm,
             pivotMm,
             faceBounds,
-            false,
+            layerOrder ?? 1,
           );
           directFaces.push(lidPart);
           createdParts.push(lidPart);
@@ -578,7 +618,7 @@ export function buildBoxGeometry(dieline: Dieline): KinematicBoxModel {
             tongueShapeData.boundsMm,
             tonguePivotMm,
             faceBounds,
-            true,
+            0,
           );
           createdParts.push(tonguePart);
 
@@ -600,6 +640,9 @@ export function buildBoxGeometry(dieline: Dieline): KinematicBoxModel {
             rotationAxis: tongueRule.axis,
             rotationSign: tongueRule.sign,
             animatedAngleRange: group.animatedAngleRange,
+            foldStage,
+            layerOrder: 0,
+            layerOffsetWorld: 0,
             faces: [tonguePart],
             children: [],
           });
@@ -607,7 +650,7 @@ export function buildBoxGeometry(dieline: Dieline): KinematicBoxModel {
         }
       }
 
-      const part = createFaceGeometryPart(face, pivotMm);
+      const part = createFaceGeometryPart(face, pivotMm, layerOrder ?? undefined);
       directFaces.push(part);
       createdParts.push(part);
     }
@@ -626,6 +669,9 @@ export function buildBoxGeometry(dieline: Dieline): KinematicBoxModel {
       rotationAxis: axis,
       rotationSign: sign,
       animatedAngleRange: group.animatedAngleRange,
+      foldStage,
+      layerOrder,
+      layerOffsetWorld,
       faces: directFaces,
       children: [...childIds.map((childId) => buildNode(childId, pivotMm)), ...extraChildren],
     };
@@ -645,6 +691,9 @@ export function buildBoxGeometry(dieline: Dieline): KinematicBoxModel {
     rotationAxis: null,
     rotationSign: 1,
     animatedAngleRange: [0, 0],
+    foldStage: [0, 90],
+    layerOrder: null,
+    layerOffsetWorld: 0,
     faces: rootDirectParts,
     children: rootChildGroupIds.map((groupId) => buildNode(groupId, rootPivotMm)),
   };
