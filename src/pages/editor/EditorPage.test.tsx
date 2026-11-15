@@ -1,25 +1,28 @@
-// Unit tests for EditorPage M3 workspace, artwork tools, PNG export, and cloud persistence
+// Unit tests for EditorPage M3 workspace, artwork tools, PNG export, auth/guest sync, and templates
+import type { Session, User } from '@supabase/supabase-js';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { useEffect } from 'react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useEditorStore } from '@features/editor-stage';
 import type { DesignElement, Project } from '@entities/design-document';
 import { type Dieline, generateTuckEndBox } from '@entities/dieline';
 import { isValidUuid } from '@shared/lib/id';
-import { GUEST_ID_STORAGE_KEY } from '@shared/lib/useGuestSession';
+import type { AuthActionResult, UseAuthResult } from '@shared/lib/useAuth';
 import EditorPage from './EditorPage';
 import { resetProjectPersistenceTracking } from './useProjectPersistence';
 
 const MOCK_3D_PNG_DATA_URL = 'data:image/png;base64,MOCK3DSNAPSHOT';
 const TEST_PROJECT_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+const AUTH_USER_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 
-const { mockExportDielinePdf, mockFetchProject, mockSaveProject } = vi.hoisted(() => ({
+const { mockExportDielinePdf, mockFetchProject, mockSaveProject, mockUseAuth } = vi.hoisted(() => ({
   mockExportDielinePdf: vi.fn<() => Promise<Uint8Array>>(),
   mockFetchProject: vi.fn<(projectId: string) => Promise<Project | null>>(),
   mockSaveProject:
-    vi.fn<(projectId: string, projectData: Project, userId: string) => Promise<Project>>(),
+    vi.fn<(projectId: string, projectData: Project, userId?: string) => Promise<Project>>(),
+  mockUseAuth: vi.fn<() => UseAuthResult>(),
 }));
 
 vi.mock('@shared/lib/exportPdf', () => ({
@@ -28,6 +31,10 @@ vi.mock('@shared/lib/exportPdf', () => ({
 
 vi.mock('@shared/lib/supabase', () => ({
   createSupabaseClient: () => ({}),
+}));
+
+vi.mock('@shared/lib/useAuth', () => ({
+  useAuth: mockUseAuth,
 }));
 
 vi.mock('@entities/design-document', async (importOriginal) => {
@@ -80,6 +87,29 @@ vi.mock('@features/editor-3d', () => ({
   },
 }));
 
+function makeAuthState(isAuthenticated = true): UseAuthResult {
+  const user = isAuthenticated
+    ? ({
+        id: AUTH_USER_ID,
+        email: 'creator@tanepack.dev',
+        user_metadata: { full_name: 'Tanepack Maker' },
+      } as unknown as User)
+    : null;
+  const session = isAuthenticated ? ({ access_token: 'mock-jwt', user } as Session) : null;
+
+  return {
+    user,
+    session,
+    isLoading: false,
+    isAuthenticated,
+    isConfigured: true,
+    error: null,
+    signIn: vi.fn<() => Promise<AuthActionResult>>(),
+    signUp: vi.fn<() => Promise<AuthActionResult>>(),
+    signOut: vi.fn<() => Promise<{ error: string | null }>>(),
+  };
+}
+
 function renderEditorPage(initialEntry = '/editor') {
   const queryClient = new QueryClient({
     defaultOptions: {
@@ -94,7 +124,10 @@ function renderEditorPage(initialEntry = '/editor') {
         initialEntries={[initialEntry]}
         future={{ v7_startTransition: true, v7_relativeSplatPath: true }}
       >
-        <EditorPage />
+        <Routes>
+          <Route path="/editor" element={<EditorPage />} />
+          <Route path="/login" element={<div data-testid="login-route">Login Page</div>} />
+        </Routes>
       </MemoryRouter>
     </QueryClientProvider>,
   );
@@ -109,6 +142,7 @@ beforeEach(() => {
   window.localStorage.clear();
   resetProjectPersistenceTracking();
   useEditorStore.getState().reset();
+  mockUseAuth.mockReturnValue(makeAuthState(true));
   mockExportDielinePdf.mockReset();
   mockExportDielinePdf.mockResolvedValue(new Uint8Array([37, 80, 68, 70]));
   mockFetchProject.mockReset();
@@ -134,6 +168,8 @@ describe('EditorPage', () => {
     expect(screen.getByRole('button', { name: 'Back to dashboard' })).toBeTruthy();
     expect(screen.getByText('Untitled Box')).toBeTruthy();
     expect(screen.getByText('Saved')).toBeTruthy();
+    expect(screen.getByTestId('topbar-user-email').textContent).toBe('creator@tanepack.dev');
+    expect(screen.getByRole('button', { name: 'Log Out' })).toBeTruthy();
     const exportButton = screen.getByRole('button', { name: /Export/i }) as HTMLButtonElement;
     expect(exportButton.disabled).toBe(false);
 
@@ -337,7 +373,7 @@ describe('EditorPage', () => {
     expect(savedCall?.[1].name).toBe('Untitled Box');
     expect(savedCall?.[1].layers.outside).toHaveLength(1);
     expect(isValidUuid(savedCall?.[2])).toBe(true);
-    expect(savedCall?.[2]).toBe(window.localStorage.getItem(GUEST_ID_STORAGE_KEY));
+    expect(savedCall?.[2]).toBe(AUTH_USER_ID);
     expect(within(screen.getByTestId('save-status-pill')).getByText('Saving...')).toBeTruthy();
     expect(screen.getByTestId('save-status-pill').getAttribute('aria-label')).toBe(
       'Save status: Saving...',
@@ -553,5 +589,26 @@ describe('EditorPage', () => {
     );
     expect(artworkTexts).toContain('Tanepack Coffee');
     expect(svg.querySelector('[data-layer="artwork"] ellipse')).not.toBeNull();
+  });
+
+  it('shows Guest Mode warning in TopBar and disables cloud saves when logged out', async () => {
+    mockUseAuth.mockReturnValue(makeAuthState(false));
+    renderEditorPage();
+
+    expect(
+      within(screen.getByTestId('save-status-pill')).getByText('Log in to save your design'),
+    ).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Log In' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Log Out' })).toBeNull();
+
+    vi.useFakeTimers();
+    fireEvent.click(screen.getByRole('button', { name: 'Add Text' }));
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2500);
+    });
+
+    expect(mockFetchProject).not.toHaveBeenCalled();
+    expect(mockSaveProject).not.toHaveBeenCalled();
   });
 });

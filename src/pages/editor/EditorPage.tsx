@@ -28,6 +28,7 @@ import {
   useState,
 } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { TopBarAccountActions } from '@widgets/app-shell';
 import {
   clampBoxDimensionMm,
   computeTextFontSizePatch,
@@ -112,6 +113,12 @@ const SAVE_STATUS_DISPLAY: Record<
     icon: 'cloud_off',
     backgroundColor: 'var(--md-sys-color-error-container)',
     color: 'var(--md-sys-color-on-error-container)',
+  },
+  guest: {
+    label: 'Log in to save your design',
+    icon: 'warning',
+    backgroundColor: 'var(--md-sys-color-tertiary-container)',
+    color: 'var(--md-sys-color-on-tertiary-container)',
   },
 };
 
@@ -717,6 +724,7 @@ export default function EditorPage() {
           </Box>
 
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexShrink: 0 }}>
+            <TopBarAccountActions compact />
             <M3Button
               m3Variant="filled"
               size="small"

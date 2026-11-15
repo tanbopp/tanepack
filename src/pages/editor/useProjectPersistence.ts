@@ -1,4 +1,4 @@
-// TanStack Query cloud sync, URL UUID resolution, Zustand hydration, and debounced auto-save
+// TanStack Query cloud sync, Supabase Auth user scoping, URL UUID resolution, and debounced auto-save
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
@@ -15,16 +15,19 @@ import { findTemplateById } from '@entities/template';
 import { env } from '@shared/config/env';
 import { createUuid, isValidUuid } from '@shared/lib/id';
 import { createSupabaseClient } from '@shared/lib/supabase';
+import { useAuth } from '@shared/lib/useAuth';
 import { useGuestSession } from '@shared/lib/useGuestSession';
 
 export const AUTO_SAVE_DEBOUNCE_MS = 2000;
 
-export type CloudSaveStatus = 'saved' | 'saving' | 'error';
+export type CloudSaveStatus = 'saved' | 'saving' | 'error' | 'guest';
 
 export interface ProjectPersistenceState {
   projectId: string;
   projectName: string;
   saveStatus: CloudSaveStatus;
+  isGuestMode: boolean;
+  guestId: string;
   statusErrorMessage: string | null;
   renameProject: (nextName: string) => void;
   flushPendingSave: () => Promise<void>;
@@ -38,7 +41,7 @@ interface EditorSnapshot {
 
 interface SaveMutationVariables {
   projectId: string;
-  guestId: string;
+  userId: string;
   name: string;
   dieline: Dieline;
   committedElements: DesignElement[];
@@ -51,7 +54,7 @@ export function resetProjectPersistenceTracking(): void {
   lastEditorProjectId = null;
 }
 
-/** Coordinates Supabase project hydration and 2s debounced auto-save for the active editor store. */
+/** Coordinates Supabase project hydration and 2s debounced auto-save for authenticated users, with Guest Mode fallback. */
 export function useProjectPersistence(): ProjectPersistenceState {
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -60,8 +63,13 @@ export function useProjectPersistence(): ProjectPersistenceState {
   const [fallbackProjectId] = useState<string>(() => createUuid());
   const projectId = isValidUuid(urlProjectId) ? urlProjectId : fallbackProjectId;
 
+  const { user, isAuthenticated, isLoading: isAuthLoading } = useAuth();
   const guestId = useGuestSession();
   const isSupabaseConfigured = createSupabaseClient() !== null;
+  const authUserId = isAuthenticated && user && isValidUuid(user.id) ? user.id : null;
+  const canCloudSync =
+    isSupabaseConfigured && !isAuthLoading && authUserId !== null && isValidUuid(projectId);
+  const isGuestMode = !isAuthLoading && authUserId === null;
 
   const dieline = useEditorStore((state) => state.dieline);
   const committedElements = useEditorStore((state) => state.committedElements);
@@ -133,9 +141,9 @@ export function useProjectPersistence(): ProjectPersistenceState {
   }, [projectId, setSearchParams, urlProjectId, urlTemplateId]);
 
   const projectQuery = useQuery({
-    queryKey: ['project', projectId],
+    queryKey: ['project', authUserId, projectId],
     queryFn: () => fetchProject(projectId),
-    enabled: isSupabaseConfigured && isValidUuid(projectId),
+    enabled: canCloudSync,
     staleTime: 0,
     refetchOnWindowFocus: false,
   });
@@ -212,7 +220,7 @@ export function useProjectPersistence(): ProjectPersistenceState {
         seedColor: env.seedColor,
       });
 
-      return saveProject(variables.projectId, payload, variables.guestId);
+      return saveProject(variables.projectId, payload, variables.userId);
     },
     onSuccess: (saved, variables) => {
       syncedSnapshotRef.current = {
@@ -220,7 +228,7 @@ export function useProjectPersistence(): ProjectPersistenceState {
         committedElements: variables.committedElements,
         name: saved.name,
       };
-      queryClient.setQueryData(['project', variables.projectId], saved);
+      queryClient.setQueryData(['project', variables.userId, variables.projectId], saved);
       void queryClient.invalidateQueries({ queryKey: ['projects'] });
     },
     onError: (err) => {
@@ -232,7 +240,7 @@ export function useProjectPersistence(): ProjectPersistenceState {
 
   // Debounce cloud writes 2 seconds after committedElements, dieline, or projectName changes settle
   useEffect(() => {
-    if (!isSupabaseConfigured || !isValidUuid(projectId) || !isValidUuid(guestId)) {
+    if (!canCloudSync || !authUserId) {
       return;
     }
 
@@ -253,7 +261,7 @@ export function useProjectPersistence(): ProjectPersistenceState {
       debounceTimerRef.current = null;
       mutate({
         projectId,
-        guestId,
+        userId: authUserId,
         name: projectName,
         dieline,
         committedElements,
@@ -267,10 +275,10 @@ export function useProjectPersistence(): ProjectPersistenceState {
       }
     };
   }, [
+    authUserId,
+    canCloudSync,
     committedElements,
     dieline,
-    guestId,
-    isSupabaseConfigured,
     mutate,
     projectId,
     projectName,
@@ -291,7 +299,7 @@ export function useProjectPersistence(): ProjectPersistenceState {
       debounceTimerRef.current = null;
     }
 
-    if (!isSupabaseConfigured || !isValidUuid(projectId) || !isValidUuid(guestId)) {
+    if (!canCloudSync || !authUserId) {
       return;
     }
 
@@ -309,7 +317,7 @@ export function useProjectPersistence(): ProjectPersistenceState {
     try {
       await mutateAsync({
         projectId,
-        guestId,
+        userId: authUserId,
         name: projectName,
         dieline: state.dieline,
         committedElements: state.committedElements,
@@ -317,12 +325,14 @@ export function useProjectPersistence(): ProjectPersistenceState {
     } catch {
       // Mutation onError already logs details; do not trap user navigation
     }
-  }, [guestId, isSupabaseConfigured, mutateAsync, projectId, projectName]);
+  }, [authUserId, canCloudSync, mutateAsync, projectId, projectName]);
 
   let saveStatus: CloudSaveStatus = 'saved';
   let statusErrorMessage: string | null = null;
 
-  if (saveMutation.isPending) {
+  if (isGuestMode) {
+    saveStatus = 'guest';
+  } else if (saveMutation.isPending) {
     saveStatus = 'saving';
   } else if (saveMutation.isError) {
     saveStatus = 'error';
@@ -338,6 +348,8 @@ export function useProjectPersistence(): ProjectPersistenceState {
     projectId,
     projectName,
     saveStatus,
+    isGuestMode,
+    guestId,
     statusErrorMessage,
     renameProject,
     flushPendingSave,

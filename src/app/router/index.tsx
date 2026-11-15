@@ -8,6 +8,8 @@ import { M3CircularProgress } from '@shared/ui';
 const HomePage = lazy(() => import('@pages/home/HomePage'));
 const DashboardPage = lazy(() => import('@pages/dashboard/DashboardPage'));
 const EditorPage = lazy(() => import('@pages/editor/EditorPage'));
+const LoginPage = lazy(() => import('@pages/auth/LoginPage'));
+const RegisterPage = lazy(() => import('@pages/auth/RegisterPage'));
 const NotFoundPage = lazy(() => import('@pages/not-found/NotFoundPage'));
 
 const homeHandle: RouteMetaHandle = {
@@ -24,6 +26,11 @@ const editorHandle: RouteMetaHandle = {
   title: 'Tanepack — Editor',
   showBackButton: true,
   hideTopBar: true,
+};
+
+const authHandle: RouteMetaHandle = {
+  title: 'Tanepack',
+  showBackButton: true,
 };
 
 const notFoundHandle: RouteMetaHandle = {
@@ -62,6 +69,24 @@ const router = createBrowserRouter(
             </Suspense>
           ),
           handle: editorHandle,
+        },
+        {
+          path: ROUTES.LOGIN,
+          element: (
+            <Suspense fallback={<M3CircularProgress />}>
+              <LoginPage />
+            </Suspense>
+          ),
+          handle: authHandle,
+        },
+        {
+          path: ROUTES.REGISTER,
+          element: (
+            <Suspense fallback={<M3CircularProgress />}>
+              <RegisterPage />
+            </Suspense>
+          ),
+          handle: authHandle,
         },
         {
           path: '*',

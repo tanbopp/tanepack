@@ -185,4 +185,35 @@ describe('design-document persistence API', () => {
       { onConflict: 'id' },
     );
   });
+
+  it('uses supabase.auth.getUser().id for saveProject and fetchUserProjects when authenticated', async () => {
+    const AUTH_USER_ID = '99999999-9999-4999-8999-999999999999';
+    const sample = createSampleProject('Auth Roast Box');
+    const getUser = vi.fn().mockResolvedValue({
+      data: { user: { id: AUTH_USER_ID } },
+      error: null,
+    });
+    const upsert = vi.fn().mockResolvedValue({ error: null });
+    const order = vi.fn().mockResolvedValue({ data: [], error: null });
+    const eq = vi.fn().mockReturnValue({ order });
+    const select = vi.fn().mockReturnValue({ eq });
+    const from = vi.fn().mockReturnValue({ upsert, select });
+
+    vi.spyOn(supabaseLib, 'createSupabaseClient').mockReturnValue({
+      from,
+      auth: { getUser },
+    } as unknown as SupabaseClient);
+
+    await saveProject(PROJECT_ID, sample, GUEST_ID);
+    expect(upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: PROJECT_ID,
+        user_id: AUTH_USER_ID,
+      }),
+      { onConflict: 'id' },
+    );
+
+    await fetchUserProjects(GUEST_ID);
+    expect(eq).toHaveBeenCalledWith('user_id', AUTH_USER_ID);
+  });
 });

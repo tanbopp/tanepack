@@ -1,10 +1,11 @@
-// Sticky M3 TopAppBar with Tanepack wordmark, optional back arrow, and action icons
+// Sticky M3 TopAppBar with Tanepack wordmark, optional back arrow, and account actions
 import AppBar from '@mui/material/AppBar';
 import Box from '@mui/material/Box';
 import Toolbar from '@mui/material/Toolbar';
 import Typography from '@mui/material/Typography';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { M3IconButton } from '@shared/ui';
+import { TopBarAccountActions } from './TopBarAccountActions';
 
 export interface TopBarProps {
   title?: string | undefined;
@@ -13,6 +14,8 @@ export interface TopBarProps {
 
 export function TopBar({ title = 'Tanepack', showBackButton = false }: TopBarProps) {
   const navigate = useNavigate();
+  const location = useLocation();
+  const isAuthPage = location.pathname === '/login' || location.pathname === '/register';
 
   return (
     <AppBar
@@ -26,14 +29,17 @@ export function TopBar({ title = 'Tanepack', showBackButton = false }: TopBarPro
         borderBottom: '1px solid var(--md-sys-color-outline-variant)',
       }}
     >
-      <Toolbar sx={{ minHeight: 64, px: { xs: 2, sm: 3 }, justifyContent: 'space-between' }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+      <Toolbar
+        sx={{ minHeight: 64, px: { xs: 2, sm: 3 }, justifyContent: 'space-between', gap: 2 }}
+      >
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}>
           {showBackButton && (
             <M3IconButton icon="arrow_back" label="Back to home" onClick={() => navigate('/')} />
           )}
           <Typography
             variant="labelLarge"
             component="span"
+            noWrap
             sx={{
               color: 'var(--md-sys-color-on-surface)',
               letterSpacing: '0.02em',
@@ -44,9 +50,8 @@ export function TopBar({ title = 'Tanepack', showBackButton = false }: TopBarPro
           </Typography>
         </Box>
 
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-          <M3IconButton icon="settings" label="Settings" disabled tooltip="Coming soon" />
-          <M3IconButton icon="help" label="Help" disabled tooltip="Coming soon" />
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexShrink: 0 }}>
+          <TopBarAccountActions hideLoginButton={isAuthPage} />
         </Box>
       </Toolbar>
     </AppBar>

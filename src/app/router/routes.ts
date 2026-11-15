@@ -3,6 +3,8 @@ export const ROUTES = {
   HOME: '/',
   DASHBOARD: '/dashboard',
   EDITOR: '/editor',
+  LOGIN: '/login',
+  REGISTER: '/register',
 } as const;
 
 export interface RouteMetaHandle {

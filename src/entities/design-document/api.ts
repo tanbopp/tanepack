@@ -1,4 +1,5 @@
 // Supabase persistence API and document builders for packaging design projects
+import type { SupabaseClient } from '@supabase/supabase-js';
 import type { DesignElement, Project } from '@entities/design-document/types';
 import type { Dieline } from '@entities/dieline';
 import { createSupabaseClient } from '@shared/lib/supabase';
@@ -29,6 +30,19 @@ export interface BuildProjectDocumentParams {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
+}
+
+async function resolveAuthenticatedUserId(supabase: SupabaseClient): Promise<string | null> {
+  if (typeof supabase.auth?.getUser !== 'function') {
+    return null;
+  }
+
+  const { data, error } = await supabase.auth.getUser();
+  if (error || !data.user?.id) {
+    return null;
+  }
+
+  return data.user.id;
 }
 
 /** Validates the minimum structural fields required to hydrate a stored Project document. */
@@ -161,17 +175,23 @@ export async function fetchProject(projectId: string): Promise<Project | null> {
   return designJson;
 }
 
-/** Fetches all saved projects belonging to a guest/user UUID, newest updated first. */
-export async function fetchUserProjects(userId: string): Promise<ProjectSummary[]> {
+/** Fetches all saved projects belonging to the authenticated (or specified) user ID, newest updated first. */
+export async function fetchUserProjects(userId?: string): Promise<ProjectSummary[]> {
   const supabase = createSupabaseClient();
-  if (!supabase || !userId) {
+  if (!supabase) {
+    return [];
+  }
+
+  const authUserId = await resolveAuthenticatedUserId(supabase);
+  const effectiveUserId = authUserId ?? userId ?? '';
+  if (!effectiveUserId) {
     return [];
   }
 
   const { data, error } = await supabase
     .from(PROJECTS_TABLE)
     .select('*')
-    .eq('user_id', userId)
+    .eq('user_id', effectiveUserId)
     .order('updated_at', { ascending: false });
 
   if (error) {
@@ -186,7 +206,7 @@ export async function fetchUserProjects(userId: string): Promise<ProjectSummary[
     .filter(isRecord)
     .map((row): ProjectSummary => {
       const id = typeof row.id === 'string' ? row.id : '';
-      const rowUserId = typeof row.user_id === 'string' ? row.user_id : userId;
+      const rowUserId = typeof row.user_id === 'string' ? row.user_id : effectiveUserId;
       const rawName = typeof row.name === 'string' ? row.name.trim() : '';
       return {
         id,
@@ -201,15 +221,21 @@ export async function fetchUserProjects(userId: string): Promise<ProjectSummary[
     .filter((summary) => summary.id.length > 0);
 }
 
-/** Upserts a packaging design Project row into Supabase using projectId and guest/user UUID. */
+/** Upserts a packaging design Project row into Supabase using supabase.auth.getUser().id when signed in. */
 export async function saveProject(
   projectId: string,
   projectData: Project,
-  userId: string,
+  userId?: string,
 ): Promise<Project> {
   const supabase = createSupabaseClient();
   if (!supabase) {
     throw new Error('Supabase client is not configured.');
+  }
+
+  const authUserId = await resolveAuthenticatedUserId(supabase);
+  const effectiveUserId = authUserId ?? userId ?? '';
+  if (!effectiveUserId) {
+    throw new Error('Authentication required to save project.');
   }
 
   const normalizedName = projectData.name.trim() || DEFAULT_PROJECT_NAME;
@@ -229,7 +255,7 @@ export async function saveProject(
   const { error } = await supabase.from(PROJECTS_TABLE).upsert(
     {
       id: projectId,
-      user_id: userId,
+      user_id: effectiveUserId,
       name: normalizedName,
       design_json: payload,
       thumbnail_url: thumbnailUrl,

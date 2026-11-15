@@ -19,7 +19,7 @@ import {
 import { TEMPLATES } from '@entities/template';
 import { isValidUuid } from '@shared/lib/id';
 import { createSupabaseClient } from '@shared/lib/supabase';
-import { useGuestSession } from '@shared/lib/useGuestSession';
+import { useAuth } from '@shared/lib/useAuth';
 import { M3Button, M3CircularProgress, M3Icon } from '@shared/ui';
 
 function formatUpdatedAt(isoString: string): string {
@@ -220,8 +220,9 @@ function ProjectThumbnail({ project }: { project: ProjectSummary }) {
 
 export default function DashboardPage() {
   const navigate = useNavigate();
-  const guestId = useGuestSession();
+  const { user, isAuthenticated, isLoading: isAuthLoading } = useAuth();
   const isSupabaseConfigured = createSupabaseClient() !== null;
+  const authUserId = isAuthenticated && user && isValidUuid(user.id) ? user.id : null;
   const [templateMenuAnchorEl, setTemplateMenuAnchorEl] = useState<HTMLElement | null>(null);
 
   const {
@@ -231,9 +232,9 @@ export default function DashboardPage() {
     error,
     refetch,
   } = useQuery({
-    queryKey: ['projects', guestId],
-    queryFn: () => fetchUserProjects(guestId),
-    enabled: isSupabaseConfigured && isValidUuid(guestId),
+    queryKey: ['projects', authUserId],
+    queryFn: () => fetchUserProjects(authUserId ?? undefined),
+    enabled: isSupabaseConfigured && !isAuthLoading && authUserId !== null,
     staleTime: 0,
     refetchOnWindowFocus: false,
   });
@@ -285,9 +286,11 @@ export default function DashboardPage() {
             My Designs
           </Typography>
           <Typography variant="bodyMedium" color="text.secondary">
-            {isSupabaseConfigured
-              ? `${projects.length} saved packaging ${projects.length === 1 ? 'design' : 'designs'}`
-              : 'Local mode: connect Supabase in .env.local to sync projects across sessions'}
+            {!isSupabaseConfigured
+              ? 'Local mode: connect Supabase in .env.local to sync projects across sessions'
+              : isAuthenticated
+                ? `${projects.length} saved packaging ${projects.length === 1 ? 'design' : 'designs'}`
+                : 'Log in to save and sync your packaging designs across devices'}
           </Typography>
         </Box>
 
@@ -429,7 +432,7 @@ export default function DashboardPage() {
       </Box>
 
       {/* Content Region */}
-      {isSupabaseConfigured && isPending ? (
+      {isSupabaseConfigured && (isAuthLoading || (isAuthenticated && isPending)) ? (
         <Box
           sx={{
             flex: 1,
@@ -440,6 +443,53 @@ export default function DashboardPage() {
           }}
         >
           <M3CircularProgress />
+        </Box>
+      ) : isSupabaseConfigured && !isAuthenticated ? (
+        <Box
+          data-testid="dashboard-auth-prompt"
+          sx={{
+            p: 5,
+            borderRadius: '20px',
+            backgroundColor: 'var(--md-sys-color-surface-container-low)',
+            border: '1px dashed var(--md-sys-color-outline-variant)',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            textAlign: 'center',
+            gap: 1.5,
+            minHeight: 260,
+          }}
+        >
+          <M3Icon name="account_circle" size={44} />
+          <Typography variant="titleMedium" color="text.primary">
+            Log in to view your saved designs
+          </Typography>
+          <Typography variant="bodyMedium" color="text.secondary" sx={{ maxWidth: 440 }}>
+            Sign in or create an account to save boxes to the cloud and access them from any device.
+            You can still use Starter Templates in Guest Mode.
+          </Typography>
+          <Box
+            sx={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: 1.5, mt: 1 }}
+          >
+            <M3Button
+              m3Variant="filled"
+              startIcon={<M3Icon name="login" size={18} />}
+              onClick={() => navigate('/login')}
+            >
+              Log In
+            </M3Button>
+            <M3Button
+              m3Variant="tonal"
+              startIcon={<M3Icon name="person_add" size={18} />}
+              onClick={() => navigate('/register')}
+            >
+              Create Account
+            </M3Button>
+            <M3Button m3Variant="text" onClick={handleCreateNew}>
+              Try Editor as Guest
+            </M3Button>
+          </Box>
         </Box>
       ) : isError ? (
         <Box

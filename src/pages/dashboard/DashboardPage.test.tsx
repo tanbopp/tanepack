@@ -1,22 +1,28 @@
-// Unit tests for DashboardPage M3 project grid, thumbnail preview, Create New, and Open actions
+// Unit tests for DashboardPage authenticated project grid, logged-out prompt, and template launches
+import type { Session, User } from '@supabase/supabase-js';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ProjectSummary } from '@entities/design-document';
 import { generateTuckEndBox } from '@entities/dieline';
-import { GUEST_ID_STORAGE_KEY } from '@shared/lib/useGuestSession';
+import type { AuthActionResult, UseAuthResult } from '@shared/lib/useAuth';
 import DashboardPage from './DashboardPage';
 
-const GUEST_ID = '33333333-3333-4333-8333-333333333333';
+const AUTH_USER_ID = '33333333-3333-4333-8333-333333333333';
 const PROJECT_1_ID = '44444444-4444-4444-8444-444444444444';
 
-const { mockFetchUserProjects } = vi.hoisted(() => ({
-  mockFetchUserProjects: vi.fn<(userId: string) => Promise<ProjectSummary[]>>(),
+const { mockFetchUserProjects, mockUseAuth } = vi.hoisted(() => ({
+  mockFetchUserProjects: vi.fn<(userId?: string) => Promise<ProjectSummary[]>>(),
+  mockUseAuth: vi.fn<() => UseAuthResult>(),
 }));
 
 vi.mock('@shared/lib/supabase', () => ({
   createSupabaseClient: () => ({}),
+}));
+
+vi.mock('@shared/lib/useAuth', () => ({
+  useAuth: mockUseAuth,
 }));
 
 vi.mock('@entities/design-document', async (importOriginal) => {
@@ -26,6 +32,29 @@ vi.mock('@entities/design-document', async (importOriginal) => {
     fetchUserProjects: mockFetchUserProjects,
   };
 });
+
+function makeAuthState(isAuthenticated = true): UseAuthResult {
+  const user = isAuthenticated
+    ? ({
+        id: AUTH_USER_ID,
+        email: 'creator@tanepack.dev',
+        user_metadata: { full_name: 'Tanepack Maker' },
+      } as unknown as User)
+    : null;
+  const session = isAuthenticated ? ({ access_token: 'mock-jwt', user } as Session) : null;
+
+  return {
+    user,
+    session,
+    isLoading: false,
+    isAuthenticated,
+    isConfigured: true,
+    error: null,
+    signIn: vi.fn<() => Promise<AuthActionResult>>(),
+    signUp: vi.fn<() => Promise<AuthActionResult>>(),
+    signOut: vi.fn<() => Promise<{ error: string | null }>>(),
+  };
+}
 
 function EditorRouteSpy() {
   const location = useLocation();
@@ -52,6 +81,8 @@ function renderDashboard() {
         <Routes>
           <Route path="/dashboard" element={<DashboardPage />} />
           <Route path="/editor" element={<EditorRouteSpy />} />
+          <Route path="/login" element={<div data-testid="login-route">Login Page</div>} />
+          <Route path="/register" element={<div data-testid="register-route">Register Page</div>} />
         </Routes>
       </MemoryRouter>
     </QueryClientProvider>,
@@ -59,7 +90,7 @@ function renderDashboard() {
 }
 
 beforeEach(() => {
-  window.localStorage.setItem(GUEST_ID_STORAGE_KEY, GUEST_ID);
+  mockUseAuth.mockReturnValue(makeAuthState(true));
   mockFetchUserProjects.mockReset();
 });
 
@@ -70,7 +101,7 @@ afterEach(() => {
 });
 
 describe('DashboardPage', () => {
-  it('fetches guest projects sorted newest first and renders cards with Open and Create New', async () => {
+  it('fetches authenticated user projects sorted newest first and renders cards with Open and Create New', async () => {
     const dieline = generateTuckEndBox({
       length: 100,
       width: 50,
@@ -81,7 +112,7 @@ describe('DashboardPage', () => {
     mockFetchUserProjects.mockResolvedValue([
       {
         id: PROJECT_1_ID,
-        userId: GUEST_ID,
+        userId: AUTH_USER_ID,
         name: 'Matcha Carton',
         thumbnailUrl: null,
         createdAt: '2026-11-14T16:00:00.000Z',
@@ -125,7 +156,7 @@ describe('DashboardPage', () => {
     renderDashboard();
 
     await waitFor(() => {
-      expect(mockFetchUserProjects).toHaveBeenCalledWith(GUEST_ID);
+      expect(mockFetchUserProjects).toHaveBeenCalledWith(AUTH_USER_ID);
       expect(screen.getByText('Matcha Carton')).toBeTruthy();
     });
 
@@ -158,6 +189,19 @@ describe('DashboardPage', () => {
     await waitFor(() => {
       expect(screen.getByTestId('editor-route')).toBeTruthy();
     });
+  });
+
+  it('prompts logged-out visitors to log in without fetching user projects', () => {
+    mockUseAuth.mockReturnValue(makeAuthState(false));
+
+    renderDashboard();
+
+    expect(screen.getByTestId('dashboard-auth-prompt')).toBeTruthy();
+    expect(screen.getByText('Log in to view your saved designs')).toBeTruthy();
+    expect(mockFetchUserProjects).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Log In' }));
+    expect(screen.getByTestId('login-route')).toBeTruthy();
   });
 
   it('navigates to /editor?template=coffee-box from Start from Template menu', async () => {
